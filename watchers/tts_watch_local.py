@@ -21,15 +21,6 @@ from typing import Optional
 
 import pyttsx3
 
-
-# Add near the top
-FFMPEG_PATH = os.environ.get(
-    "NIFTYTTS_FFMPEG_PATH",
-    r"C:\Users\Downloads\ffmpeg\ffmpeg.exe"
-)
-
-
-
 ROOT = Path(__file__).resolve().parents[1]
 IN_DIR = ROOT / "jobs" / "incoming"
 OUT_DIR = ROOT / "jobs" / "outgoing"
@@ -41,6 +32,13 @@ VOLUME = float(os.environ.get("NIFTYTTS_VOLUME", "1.0"))
 
 POLL_INTERVAL = 0.5   # seconds
 SILENT_SECONDS_AFTER_DONE = 1.0
+
+FFMPEG_PATH = os.environ.get(
+    "NIFTYTTS_FFMPEG_PATH",
+    r"C:\Users\Duane\Downloads\ffmpeg\ffmpeg.exe"
+)
+
+
 
 def ensure_dirs():
     IN_DIR.mkdir(parents=True, exist_ok=True)
