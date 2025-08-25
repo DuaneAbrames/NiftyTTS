@@ -21,6 +21,15 @@ from typing import Optional
 
 import pyttsx3
 
+
+# Add near the top
+FFMPEG_PATH = os.environ.get(
+    "NIFTYTTS_FFMPEG_PATH",
+    r"C:\Users\Downloads\ffmpeg\ffmpeg.exe"
+)
+
+
+
 ROOT = Path(__file__).resolve().parents[1]
 IN_DIR = ROOT / "jobs" / "incoming"
 OUT_DIR = ROOT / "jobs" / "outgoing"
@@ -40,10 +49,26 @@ def ensure_dirs():
 
 def ffmpeg_exists() -> bool:
     try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=False)
+        subprocess.run([FFMPEG_PATH, "-version"], capture_output=True, check=False)
         return True
     except FileNotFoundError:
         return False
+
+def wav_to_mp3(wav_path: Path, mp3_tmp: Path):
+    # 64 kbps, mono, 44.1kHz — tweak to taste
+    cmd = [
+        FFMPEG_PATH, "-y",
+        "-hide_banner", "-loglevel", "error",
+        "-i", str(wav_path),
+        "-vn",
+        "-ac", "1",
+        "-ar", "44100",
+        "-b:a", "64k",
+        str(mp3_tmp),
+    ]
+    subprocess.run(cmd, check=True)
+
+
 
 def pick_voice(engine: pyttsx3.Engine, substr: str) -> Optional[str]:
     """Choose a voice id whose name matches substr (case-insensitive)."""
@@ -73,20 +98,6 @@ def synth_to_wav(text_path: Path, wav_path: Path):
     # Save to WAV (blocking until done)
     engine.save_to_file(text, str(wav_path))
     engine.runAndWait()
-
-def wav_to_mp3(wav_path: Path, mp3_tmp: Path):
-    # 64 kbps, mono, 44.1kHz — tweak to taste
-    cmd = [
-        "ffmpeg", "-y",
-        "-hide_banner", "-loglevel", "error",
-        "-i", str(wav_path),
-        "-vn",
-        "-ac", "1",
-        "-ar", "44100",
-        "-b:a", "64k",
-        str(mp3_tmp),
-    ]
-    subprocess.run(cmd, check=True)
 
 def process_job(txt_path: Path):
     base = txt_path.stem  # e.g. example.com-a1b2c3d4e5f6a7b8
