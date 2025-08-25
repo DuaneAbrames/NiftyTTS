@@ -74,17 +74,31 @@ def html_to_text(html: str) -> str:
     lines = [ln for ln in lines if ln]
     return "\n".join(lines)
 
-def extract_text_from_response(resp: httpx.Response) -> str:
+def extract_text_from_response(resp: httpx.Response) -> tuple[str, str]:
+    """
+    Returns (text, kind) where kind is 'text' for text/plain and 'html' for text/html.
+    """
     ctype = (resp.headers.get("content-type") or "").lower()
     body = resp.content
+
     if len(body) > MAX_DOWNLOAD_BYTES:
         raise HTTPException(413, f"Downloaded content exceeds {MAX_DOWNLOAD_BYTES/1_000_000:.1f} MB limit")
+
+    # Plain text
     if "text/plain" in ctype:
-        return body.decode(resp.encoding or "utf-8", errors="replace")
-    if "text/html" in ctype or body.strip().lower().startswith(b"<!doctype html") or b"<html" in body[:4096].lower():
+        return body.decode(resp.encoding or "utf-8", errors="replace"), "text"
+
+    # HTML
+    if (
+        "text/html" in ctype
+        or body.strip().lower().startswith(b"<!doctype html")
+        or b"<html" in body[:4096].lower()
+    ):
         decoded = body.decode(resp.encoding or "utf-8", errors="replace")
-        return html_to_text(decoded)
+        return html_to_text(decoded), "html"
+
     raise HTTPException(415, "Unsupported content-type. Please supply a text/plain or HTML page.")
+
 
 def build_job(url: str, text: str) -> str:
     job_id = uuid.uuid4().hex[:16]
@@ -106,35 +120,33 @@ async def _sleep(seconds: float):
 
 def unwrap_email_wrapped(text: str) -> str:
     """
-    Convert "soft-wrapped email style" paragraphs:
+    Convert 'email-style' soft-wrapped paragraphs to single lines:
       - Keep blank lines as paragraph boundaries
-      - Join single newlines inside paragraphs with spaces
-      - Handle hyphenated wraps: 'fo-' + 'obar' -> 'foobar'
-      - Keep list items (-, *, •, '1.' etc.) as separate lines
+      - Join single newlines inside a paragraph with spaces
+      - Handle hyphen wraps at line-end: 'fo-' + 'obar' -> 'foobar'
+      - Preserve list items (-, *, •, '1.') as their own lines
     """
-    # normalize newlines
-    t = text.replace('\r\n', '\n').replace('\r', '\n')
+    t = text.replace("\r\n", "\n").replace("\r", "\n")
+    paras = re.split(r"\n\s*\n+", t)  # split on 1+ blank lines
 
-    # split into blocks by 1+ blank lines (paragraphs)
-    paras = re.split(r'\n\s*\n+', t)
+    bullet_re = re.compile(r"^(\s*([*\-\u2022]|\d+\.)\s+)")
+    out_paras: list[str] = []
 
-    out_paras = []
-    bullet_re = re.compile(r'^(\s*([*\-\u2022]|\d+\.)\s+)')
     for p in paras:
-        lines = [ln.strip() for ln in p.split('\n') if ln.strip() != '']
+        lines = [ln.strip() for ln in p.split("\n") if ln.strip()]
         if not lines:
-            out_paras.append('')
+            out_paras.append("")
             continue
 
-        rebuilt = []
-        cur = ''
+        rebuilt: list[str] = []
+        cur = ""
 
         for ln in lines:
-            # Keep list/bullet lines as own lines
+            # keep list items intact on their own line
             if bullet_re.match(ln):
                 if cur:
                     rebuilt.append(cur)
-                    cur = ''
+                    cur = ""
                 rebuilt.append(ln)
                 continue
 
@@ -142,22 +154,43 @@ def unwrap_email_wrapped(text: str) -> str:
                 cur = ln
                 continue
 
-            # If previous ends with hyphen (likely wrap), join without space.
-            # Avoid merging real hyphenated words like 'e-mail' that were not a wrap:
-            if cur.endswith('-') and not re.search(r'\w-\w$', cur):
+            # if previous ends with a hyphen (likely wrap), join without space
+            if cur.endswith("-") and not re.search(r"\w-\w$", cur):
                 cur = cur[:-1] + ln.lstrip()
             else:
-                cur = cur + ' ' + ln.lstrip()
+                cur = cur + " " + ln.lstrip()
 
         if cur:
             rebuilt.append(cur)
 
-        # Join bullet-preserved lines back with newlines, not spaces
-        out_paras.append('\n'.join(rebuilt))
+        out_paras.append("\n".join(rebuilt))
 
-    # paragraphs stay separated by a blank line
-    return '\n\n'.join(out_paras).strip()
+    return "\n\n".join(out_paras).strip()
 
+
+def strip_leading_email_headers(text: str) -> str:
+    """
+    Remove RFC822-style headers only from the very top of the text.
+    Stops at the first blank line OR the first non 'Header: value' line.
+    Only matches at column 0.
+    """
+    t = text.replace("\r\n", "\n").replace("\r", "\n")
+    lines = t.split("\n")
+
+    header_re = re.compile(r"^[A-Za-z][A-Za-z0-9\-]*:\s.*$")
+    i = 0
+    while i < len(lines):
+        ln = lines[i]
+        if ln == "":
+            # consume the blank line separating headers from body
+            i += 1
+            break
+        if header_re.match(ln):
+            i += 1
+            continue
+        break
+
+    return "\n".join(lines[i:]).lstrip("\n")
 
 
 # --------- UI fragments ---------
@@ -254,8 +287,13 @@ async def index(u: str | None = Query(default=None, description="URL to convert"
         # Return the form again with a message
         return render(form_step1(prefill=u, message=f"Fetch failed: {html_escape(str(e))}"))
 
-    text = extract_text_from_response(resp)
-    text = unwrap_email_wrapped(text)
+    text, kind = extract_text_from_response(resp)
+
+    # For text/plain only: strip top-of-file headers and unwrap soft-wrapped lines
+    if kind == "text":
+        text = strip_leading_email_headers(text)
+        text = unwrap_email_wrapped(text)
+        
     return render(form_step2(u, text))
 
 @app.post("/submit", response_class=HTMLResponse)
