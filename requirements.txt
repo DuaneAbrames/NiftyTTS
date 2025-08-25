@@ -3,3 +3,6 @@ uvicorn[standard]
 httpx
 beautifulsoup4
 pyttsx3
+edge-tts
+
+
