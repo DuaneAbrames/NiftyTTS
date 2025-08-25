@@ -12,6 +12,8 @@ from fastapi import FastAPI, Query, HTTPException
 from fastapi.responses import HTMLResponse, FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
+from string import Template
+
 # --- Config (tweak as you like) ---
 BASE_DIR = Path(__file__).resolve().parent
 JOBS_DIR = BASE_DIR / "jobs"
@@ -27,9 +29,7 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="One-Page URL→TTS Jobber")
 
 SAFE_SCHEMES = {"http", "https"}
-
-HTML_TEMPLATE = """
-<!doctype html>
+HTML_TEMPLATE = Template(r"""<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
 <title>URL → MP3 (TTS) – Simple</title>
@@ -50,15 +50,15 @@ HTML_TEMPLATE = """
 <h1>URL → MP3 (Text-to-Speech)</h1>
 <p class="muted">Paste a public URL pointing to a <b>text/plain</b> or <b>HTML</b> page. We'll fetch it, save a job, and (if ready) give you an MP3.</p>
 <form method="get" action="/">
-  <input type="url" name="u" placeholder="https://example.com/chapter-1" value="{prefill}" required />
+  <input type="url" name="u" placeholder="https://example.com/chapter-1" value="$prefill" required />
   <button type="submit">Convert</button>
 </form>
 
-{content}
-"""
+$content
+""")
 
 def page(content: str = "", prefill: str = "") -> HTMLResponse:
-    return HTMLResponse(HTML_TEMPLATE.format(content=content, prefill=prefill))
+    return HTMLResponse(HTML_TEMPLATE.substitute(content=content, prefill=prefill))
 
 def sanitize_filename(name: str) -> str:
     # conservative, filesystem-safe
