@@ -39,19 +39,20 @@ def ensure_dirs():
             pass
 
 async def synth_file(text_path: Path, out_mp3: Path):
-    # Write the temp MP3 in the same filesystem as the final target to avoid EXDEV
+    # temp file in same dir to avoid cross-device errors
     tmp_mp3 = out_mp3.with_name(out_mp3.name + ".tmp")
 
     txt = text_path.read_text(encoding="utf-8", errors="replace")
 
     communicate = edge_tts.Communicate(txt, VOICE, rate=RATE, pitch=PITCH)
+    # Await directly, with timeout
     await asyncio.wait_for(communicate.save(str(tmp_mp3)), timeout=SYNTH_TIMEOUT)
 
     if not tmp_mp3.exists() or tmp_mp3.stat().st_size == 0:
         raise RuntimeError(f"Synthesis produced empty file: {tmp_mp3}")
 
-    # Atomic replace within the same directory/device
     os.replace(tmp_mp3, out_mp3)
+
 
 def main():
     ensure_dirs()
