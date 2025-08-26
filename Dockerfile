@@ -1,7 +1,7 @@
 # A Dockerfile is a text document that contains all the commands
 # a user could call on the command line to assemble an image.
 
-FROM python:3.9.4-buster
+FROM python
 
 # Our Debian with python is now installed.
 # Imagine we have folders /sys, /tmp, /bin etc. there
