@@ -37,7 +37,7 @@ WORKDIR /app
 # We could skip this part and then type
 # python -m uvicorn main.app:app ... below
 
-CMD python -m uvicorn main:app --host 0.0.0.0 --port 7230
+CMD python -m uvicorn app:app --host 0.0.0.0 --port 7230
 
 # This command runs our uvicorn server
 # See Troubleshoots to understand why we need to type in --host 0.0.0.0 and --port 80
