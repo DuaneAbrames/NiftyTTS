@@ -20,7 +20,7 @@ import edge_tts
 ROOT = Path(__file__).resolve().parents[1]
 IN_DIR = ROOT / "jobs" / "incoming"
 OUT_DIR = ROOT / "jobs" / "outgoing"
-TMP_DIR = ROOT / "jobs" / "tmp"
+TMP_DIR = ROOT / "jobs" / "outgoing"
 
 VOICE = os.environ.get("NIFTYTTS_EDGE_VOICE", "en-US-GuyNeural")
 RATE = os.environ.get("NIFTYTTS_EDGE_RATE", "+0%")
@@ -31,14 +31,27 @@ def ensure_dirs():
     IN_DIR.mkdir(parents=True, exist_ok=True)
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     TMP_DIR.mkdir(parents=True, exist_ok=True)
+    # clean stray temp files in OUT_DIR
+    for p in OUT_DIR.glob("*.mp3.tmp"):
+        try:
+            p.unlink()
+        except Exception:
+            pass
 
 async def synth_file(text_path: Path, out_mp3: Path):
-    tmp_mp3 = TMP_DIR / (out_mp3.name + ".tmp")
-    text = text_path.read_text(encoding="utf-8", errors="replace")
-    communicate = edge_tts.Communicate(text, VOICE, rate=RATE, pitch=PITCH)
-    # edge-tts writes MP3 directly
-    await communicate.save(str(tmp_mp3))
-    tmp_mp3.replace(out_mp3)
+    # Write the temp MP3 in the same filesystem as the final target to avoid EXDEV
+    tmp_mp3 = out_mp3.with_name(out_mp3.name + ".tmp")
+
+    txt = text_path.read_text(encoding="utf-8", errors="replace")
+
+    communicate = edge_tts.Communicate(txt, VOICE, rate=RATE, pitch=PITCH)
+    await asyncio.wait_for(communicate.save(str(tmp_mp3)), timeout=SYNTH_TIMEOUT)
+
+    if not tmp_mp3.exists() or tmp_mp3.stat().st_size == 0:
+        raise RuntimeError(f"Synthesis produced empty file: {tmp_mp3}")
+
+    # Atomic replace within the same directory/device
+    os.replace(tmp_mp3, out_mp3)
 
 def main():
     ensure_dirs()
