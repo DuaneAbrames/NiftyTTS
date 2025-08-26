@@ -1,0 +1,118 @@
+# watchers/tts_watch_piper.py
+"""
+Piper watcher:
+- Watches jobs/incoming/*.txt
+- Calls piper.exe with a selected model to produce WAV
+- Encodes WAV → MP3 using ffmpeg
+- Atomic move into jobs/outgoing/<base>.mp3
+
+Env vars (or edit defaults below):
+  NIFTYTTS_PIPER_EXE   : path to piper.exe
+  NIFTYTTS_PIPER_MODEL : path to voice model .onnx
+  NIFTYTTS_FFMPEG_PATH : path to ffmpeg.exe
+  NIFTYTTS_PIPER_LENGTH: speaking rate (e.g., 1.0 normal, 0.9 slower, 1.1 faster)
+  NIFTYTTS_PIPER_NOISE : noise scale (0.667 default)
+"""
+
+import os
+import time
+import subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+IN_DIR = ROOT / "jobs" / "incoming"
+OUT_DIR = ROOT / "jobs" / "outgoing"
+TMP_DIR = ROOT / "jobs" / "tmp"
+
+PIPER_EXE   = os.environ.get("NIFTYTTS_PIPER_EXE",   r"C:\Users\Duane\Downloads\piper\piper.exe")
+PIPER_MODEL = os.environ.get("NIFTYTTS_PIPER_MODEL", r"C:\Users\Duane\Downloads\piper\models\en_US-joe-medium.onnx")
+FFMPEG_PATH = os.environ.get("NIFTYTTS_FFMPEG_PATH", r"C:\Users\Duane\Downloads\ffmpeg\ffmpeg.exe")
+
+PIPER_LENGTH = os.environ.get("NIFTYTTS_PIPER_LENGTH", "1.0")
+PIPER_NOISE  = os.environ.get("NIFTYTTS_PIPER_NOISE",  "0.667")
+
+POLL_INTERVAL = 0.5
+
+def ensure_dirs():
+    IN_DIR.mkdir(parents=True, exist_ok=True)
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    TMP_DIR.mkdir(parents=True, exist_ok=True)
+
+def check_tool(path: str, args: list[str]):
+    try:
+        subprocess.run([path, *args], capture_output=True, check=False)
+        return True
+    except FileNotFoundError:
+        return False
+
+def piper_to_wav(text_path: Path, wav_path: Path):
+    text = text_path.read_text(encoding="utf-8", errors="replace")
+    # Pipe text to Piper's stdin
+    cmd = [
+        PIPER_EXE,
+        "--model", PIPER_MODEL,
+        "--length_scale", PIPER_LENGTH,
+        "--noise_scale", PIPER_NOISE,
+        "--output_file", str(wav_path),
+    ]
+    proc = subprocess.run(cmd, input=text.encode("utf-8"), check=True)
+    return proc.returncode == 0
+
+def wav_to_mp3(wav_path: Path, mp3_tmp: Path):
+    cmd = [
+        FFMPEG_PATH, "-y",
+        "-hide_banner", "-loglevel", "error",
+        "-i", str(wav_path),
+        "-vn", "-ac", "1", "-ar", "44100", "-b:a", "80k",
+        str(mp3_tmp),
+    ]
+    subprocess.run(cmd, check=True)
+
+def process_job(txt: Path):
+    base = txt.stem
+    out_mp3 = OUT_DIR / f"{base}.mp3"
+    if out_mp3.exists() and out_mp3.stat().st_size > 0:
+        return
+
+    tmp_wav = TMP_DIR / f"{base}.wav"
+    tmp_mp3 = TMP_DIR / f"{base}.mp3"
+
+    try:
+        print(f"[+] Piper synth: {txt.name}")
+        if not check_tool(PIPER_EXE, ["--help"]):
+            raise RuntimeError(f"Piper not found: {PIPER_EXE}")
+        if not check_tool(FFMPEG_PATH, ["-version"]):
+            raise RuntimeError(f"ffmpeg not found: {FFMPEG_PATH}")
+
+        piper_to_wav(txt, tmp_wav)
+        wav_to_mp3(tmp_wav, tmp_mp3)
+        tmp_mp3.replace(out_mp3)
+        print(f"[✓] wrote {out_mp3.name}")
+    finally:
+        for p in (tmp_wav, tmp_mp3):
+            try:
+                if p.exists():
+                    p.unlink()
+            except Exception:
+                pass
+
+def main():
+    ensure_dirs()
+    print(f"Piper watcher on {IN_DIR} → {OUT_DIR}")
+    print(f"Model={PIPER_MODEL} length={PIPER_LENGTH} noise={PIPER_NOISE}")
+    seen = set()
+    while True:
+        for txt in IN_DIR.glob("*.txt"):
+            base = txt.stem
+            out_mp3 = OUT_DIR / f"{base}.mp3"
+            if base in seen or (out_mp3.exists() and out_mp3.stat().st_size > 0):
+                continue
+            seen.add(base)
+            try:
+                process_job(txt)
+            except Exception as e:
+                print(f"[x] {base}: {e}")
+        time.sleep(POLL_INTERVAL)
+
+if __name__ == "__main__":
+    main()
