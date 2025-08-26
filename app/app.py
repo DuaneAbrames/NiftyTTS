@@ -2,6 +2,7 @@ import re
 import time
 import uuid
 import json
+import os
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -12,6 +13,7 @@ from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from string import Template
 
 # --- Config ---
+BACKEND = os.environ.get("BACKEND", "edge")
 BASE_DIR = Path(__file__).resolve().parent
 JOBS_DIR = BASE_DIR / "jobs"
 IN_DIR = JOBS_DIR / "incoming"
@@ -28,6 +30,8 @@ app = FastAPI(title="NiftyTTS – Simple 2-Step")
 
 SAFE_SCHEMES = {"http", "https"}
 
+from string import Template
+
 HTML_TEMPLATE = Template(r"""<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
@@ -39,7 +43,7 @@ HTML_TEMPLATE = Template(r"""<!doctype html>
   form { display: grid; gap: .75rem; }
   input[type=url], textarea { width: 100%; padding: .6rem .8rem; border: 1px solid #ccc; border-radius: .5rem; }
   textarea { min-height: 420px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
-  button { padding: .7rem 1rem; border: 0; border-radius: .5rem; background: #111; color: #fff; cursor: pointer; width: fit-content;}
+  button { padding: .7rem 1rem; border: 0; border-radius: .5rem; background: #111; color: #fff; cursor: pointer; width: fit-content; }
   .card { border: 1px solid #e5e5e5; border-radius: .75rem; padding: 1rem; margin-top: 1rem; }
   .muted { color: #666; }
   .ok { color: #0a7f2e; }
@@ -48,13 +52,23 @@ HTML_TEMPLATE = Template(r"""<!doctype html>
   a.btn { display:inline-block; padding:.5rem .8rem; border:1px solid #111; border-radius:.5rem; text-decoration:none; }
   audio { width: 100%; margin-top: .5rem; }
   code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+
+  /* backend badge */
+  .hdr { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin-bottom: .75rem; }
+  .badge { font-size: .85rem; padding: .2rem .5rem; border: 1px solid currentColor; border-radius: .5rem; white-space: nowrap; }
 </style>
+
+<div class="hdr">
+  <h1 style="margin:0;">NiftyTTS – URL → Text → MP3</h1>
+  <div class="badge">Backend: $backend</div>
+</div>
 
 $body
 """)
 
 def render(body: str) -> HTMLResponse:
-    return HTMLResponse(HTML_TEMPLATE.substitute(body=body))
+    return HTMLResponse(HTML_TEMPLATE.substitute(body=body, backend=BACKEND))
+
 
 # --------- helpers ---------
 
