@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 from urllib.parse import urlparse
-
+from datetime import datetime
 import httpx
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, Query, HTTPException, Form, Request
@@ -113,17 +113,58 @@ def extract_text_from_response(resp: httpx.Response) -> tuple[str, str]:
 
     raise HTTPException(415, "Unsupported content-type. Please supply a text/plain or HTML page.")
 
-
 def build_job(url: str, text: str) -> str:
-    job_id = uuid.uuid4().hex[:16]
-    safe_host = sanitize_filename(urlparse(url).netloc or "unknown")
-    base_name = f"{safe_host}-{job_id}"
+    """
+    Create a job basename from the URL and current timestamp.
+    Example:
+      http://www.xxx.com/foo/bar/baz/A totally effed-up story.html
+      -> xxx-com-foo-bar-baz-a totally effed-up story (08-25-25@18-31)
+    """
+    parsed = urlparse(url)
+
+    # 1. domain without scheme or "www."
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    host = host.replace(".", "-")
+
+    # 2. path components
+    path = parsed.path.strip("/")
+    parts = []
+    if path:
+        parts = path.split("/")
+
+        # drop extension from the last segment
+        last = parts[-1]
+        if "." in last:
+            last = last.rsplit(".", 1)[0]
+        parts[-1] = last
+
+    # 3. combine host + path into a single string
+    combined = "-".join([host] + parts) if parts else host
+
+    # 4. lowercase
+    combined = combined.lower()
+
+    # 5. add timestamp
+    timestamp = datetime.now().strftime("(%m-%d-%y@%H-%M)")
+    base_name = f"{combined} {timestamp}"
+
+    # 6. sanitize (remove bad filesystem chars)
+    base_name = re.sub(r"[^a-z0-9 _\-().@]", "_", base_name)
+
+    # Write files
     text_path = IN_DIR / f"{base_name}.txt"
     meta_path = IN_DIR / f"{base_name}.json"
     text_path.write_text(text, encoding="utf-8")
-    meta = {"url": url, "job_id": job_id, "created_ts": int(time.time()), "text_file": text_path.name}
+    meta = {
+        "url": url,
+        "created_ts": int(time.time()),
+        "text_file": text_path.name,
+    }
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return base_name
+
 
 def mp3_path_for(base_name: str) -> Path:
     return OUT_DIR / f"{base_name}.mp3"
