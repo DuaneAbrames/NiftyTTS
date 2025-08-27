@@ -92,8 +92,10 @@ def main():
         for txt_path in IN_DIR.glob("*.txt"):
             base = txt_path.stem
             out_mp3 = OUT_DIR / f"{base}.mp3"
+            err_file = OUT_DIR / f"{base}.err.txt"
 
-            if base in seen or (out_mp3.exists() and out_mp3.stat().st_size > 0):
+            # Skip if we already processed this base, or there is a final (or error) file present
+            if base in seen or (out_mp3.exists() and out_mp3.stat().st_size > 0) or (err_file.exists() and err_file.stat().st_size > 0):
                 continue
             seen.add(base)
 
@@ -105,31 +107,13 @@ def main():
                 write_err(base, "Empty text after preprocessing", None, raw)
                 continue
 
-            tmp_mp3 = out_mp3.with_name(out_mp3.name + ".tmp")
-
             start = time.time()
             try:
                 bytes_written = loop.run_until_complete(synth_to_mp3(txt, out_mp3))
                 dur = time.time() - start
+                print(f"[✓] {base}: finalized {out_mp3.name} ({bytes_written} bytes) in {dur:.1f}s")
 
-                # Sanity checks
-                if not tmp_mp3.exists():
-                    write_err(base, "No tmp MP3 produced", None, txt)
-                    continue
-
-                size = tmp_mp3.stat().st_size
-                print(f"[=] {base}: wrote tmp {size} bytes in {dur:.1f}s")
-                if size < MIN_MP3_BYTES or bytes_written == 0:
-                    write_err(base, f"MP3 too small ({size} bytes) or zero audio chunks", None, txt)
-                    try: tmp_mp3.unlink()
-                    except: pass
-                    continue
-
-                # Atomic replace inside OUT_DIR
-                os.replace(tmp_mp3, out_mp3)
-                print(f"[✓] {base}: finalized {out_mp3.name} ({out_mp3.stat().st_size} bytes)")
-                # after success
-                err_file = OUT_DIR / f"{base}.err.txt"
+                # Clear stale error file if present
                 if err_file.exists():
                     try:
                         err_file.unlink()
@@ -138,12 +122,9 @@ def main():
                         pass
             except Exception as e:
                 write_err(base, "Exception during synthesis", e, txt)
-                try:
-                    if tmp_mp3.exists():
-                        tmp_mp3.unlink()
-                except Exception:
-                    pass
+
         time.sleep(POLL_INTERVAL)
+
 
 if __name__ == "__main__":
     main()
