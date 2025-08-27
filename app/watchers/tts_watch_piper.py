@@ -18,6 +18,7 @@ import os
 import time
 import subprocess
 from pathlib import Path
+import json
 
 ROOT = Path(__file__).resolve().parents[1]
 IN_DIR = ROOT / "jobs" / "incoming"
@@ -76,9 +77,24 @@ def wav_to_mp3(wav_path: Path, mp3_tmp: Path):
     ]
     subprocess.run(cmd, check=True)
 
+def out_path(base: str) -> Path:
+    meta = IN_DIR / f"{base}.json"
+    out_mp3 = OUT_DIR / f"{base}.mp3"
+    if meta.exists():
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+            rel = data.get("output_rel")
+            if rel:
+                out_mp3 = OUT_DIR / rel
+        except Exception:
+            pass
+    out_mp3.parent.mkdir(parents=True, exist_ok=True)
+    return out_mp3
+
+
 def process_job(txt: Path):
     base = txt.stem
-    out_mp3 = OUT_DIR / f"{base}.mp3"
+    out_mp3 = out_path(base)
     if out_mp3.exists() and out_mp3.stat().st_size > 0:
         return
 
@@ -112,7 +128,7 @@ def main():
     while True:
         for txt in IN_DIR.glob("*.txt"):
             base = txt.stem
-            out_mp3 = OUT_DIR / f"{base}.mp3"
+            out_mp3 = out_path(base)
             if base in seen or (out_mp3.exists() and out_mp3.stat().st_size > 0):
                 continue
             seen.add(base)
