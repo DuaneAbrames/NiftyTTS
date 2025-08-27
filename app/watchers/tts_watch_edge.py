@@ -45,33 +45,38 @@ def write_err(base: str, msg: str, exc: BaseException | None = None, text_sample
 async def synth_to_mp3(txt: str, out_mp3: Path) -> int:
     """
     Synthesize to OUT_DIR/<name>.mp3.tmp then os.replace() to final.
-    Returns number of bytes written.
-    Compatible with edge-tts variants by passing format to .save().
+    Returns number of bytes written. If the engine writes directly
+    to the final file (rare), accept that as success too.
     """
     tmp_mp3 = out_mp3.with_name(out_mp3.name + ".tmp")
 
-    # Build communicator (NO format here; some versions don't accept it)
     communicate = edge_tts.Communicate(txt, VOICE, rate=RATE, pitch=PITCH)
 
-    # Try preferred signature: save(format=...)
+    # Prefer passing format to .save(); fall back if not supported
     try:
         await asyncio.wait_for(communicate.save(str(tmp_mp3), format=OUTPUT_FORMAT), timeout=SYNTH_TIMEOUT)
     except TypeError:
-        # Fallback for older/newer variants that use a different kw or no kw
         await asyncio.wait_for(communicate.save(str(tmp_mp3)), timeout=SYNTH_TIMEOUT)
 
-    # Sanity checks
-    if not tmp_mp3.exists():
-        raise RuntimeError("edge-tts produced no file")
-    size = tmp_mp3.stat().st_size
-    if size < MIN_MP3_BYTES:
-        # Clean up and raise to let caller write an .err.txt
-        try: tmp_mp3.unlink()
-        except: pass
-        raise RuntimeError(f"edge-tts produced a too-small MP3 ({size} bytes)")
+    # Happy path: tmp exists
+    if tmp_mp3.exists():
+        size = tmp_mp3.stat().st_size
+        if size < MIN_MP3_BYTES:
+            try: tmp_mp3.unlink()
+            except: pass
+            raise RuntimeError(f"edge-tts produced a too-small MP3 ({size} bytes)")
+        os.replace(tmp_mp3, out_mp3)
+        return size
 
-    os.replace(tmp_mp3, out_mp3)
-    return size
+    # Tolerant path: some environments write final directly
+    if out_mp3.exists():
+        size = out_mp3.stat().st_size
+        if size >= MIN_MP3_BYTES:
+            return size
+
+    # Neither tmp nor valid final found
+    raise RuntimeError("No tmp MP3 produced and no valid final MP3 present")
+
 
 
 def main():
@@ -123,6 +128,14 @@ def main():
                 # Atomic replace inside OUT_DIR
                 os.replace(tmp_mp3, out_mp3)
                 print(f"[✓] {base}: finalized {out_mp3.name} ({out_mp3.stat().st_size} bytes)")
+                # after success
+                err_file = OUT_DIR / f"{base}.err.txt"
+                if err_file.exists():
+                    try:
+                        err_file.unlink()
+                        print(f"[-] {base}: cleared stale error log")
+                    except Exception:
+                        pass
             except Exception as e:
                 write_err(base, "Exception during synthesis", e, txt)
                 try:
