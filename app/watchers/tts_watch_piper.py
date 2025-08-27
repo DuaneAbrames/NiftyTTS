@@ -38,10 +38,18 @@ def ensure_dirs():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     TMP_DIR.mkdir(parents=True, exist_ok=True)
 
-def check_tool(path: str, args: list[str]):
+def check_tool(path: str, args: list[str]) -> bool:
+    """Return True only if the tool runs successfully.
+
+    Previously this helper only verified that the executable existed. If the
+    command failed (non-zero exit status) the function still returned True,
+    causing the watcher to proceed with a broken tool and later fail deeper in
+    the pipeline. We now inspect the return code so invalid binaries are
+    detected early."""
+
     try:
-        subprocess.run([path, *args], capture_output=True, check=False)
-        return True
+        proc = subprocess.run([path, *args], capture_output=True, check=False)
+        return proc.returncode == 0
     except FileNotFoundError:
         return False
 
@@ -80,9 +88,9 @@ def process_job(txt: Path):
     try:
         print(f"[+] Piper synth: {txt.name}")
         if not check_tool(PIPER_EXE, ["--help"]):
-            raise RuntimeError(f"Piper not found: {PIPER_EXE}")
+            raise RuntimeError(f"Piper not found or failed to run: {PIPER_EXE}")
         if not check_tool(FFMPEG_PATH, ["-version"]):
-            raise RuntimeError(f"ffmpeg not found: {FFMPEG_PATH}")
+            raise RuntimeError(f"ffmpeg not found or failed to run: {FFMPEG_PATH}")
 
         piper_to_wav(txt, tmp_wav)
         wav_to_mp3(tmp_wav, tmp_mp3)
