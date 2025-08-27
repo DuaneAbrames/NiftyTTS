@@ -2,6 +2,7 @@
 import time
 from pathlib import Path
 import shutil
+from job_utils import parse_job_file, finalize_output
 
 IN_DIR = Path(__file__).resolve().parents[1] / "jobs" / "incoming"
 OUT_DIR = Path(__file__).resolve().parents[1] / "jobs" / "outgoing"
@@ -35,8 +36,9 @@ def main():
             if out.exists():
                 continue
 
-            # ---- replace this with REAL TTS ----
+            meta, _ = parse_job_file(txt, base)
             write_stub_mp3(out)
+            finalize_output(out, meta)
             print(f"Created {out.name}")
 
         time.sleep(1.0)

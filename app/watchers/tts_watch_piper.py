@@ -18,6 +18,7 @@ import os
 import time
 import subprocess
 from pathlib import Path
+from job_utils import parse_job_file, finalize_output
 
 ROOT = Path(__file__).resolve().parents[1]
 IN_DIR = ROOT / "jobs" / "incoming"
@@ -53,8 +54,7 @@ def check_tool(path: str, args: list[str]) -> bool:
     except FileNotFoundError:
         return False
 
-def piper_to_wav(text_path: Path, wav_path: Path):
-    text = text_path.read_text(encoding="utf-8", errors="replace")
+def piper_to_wav(text: str, wav_path: Path):
     # Pipe text to Piper's stdin
     cmd = [
         PIPER_EXE,
@@ -92,9 +92,11 @@ def process_job(txt: Path):
         if not check_tool(FFMPEG_PATH, ["-version"]):
             raise RuntimeError(f"ffmpeg not found or failed to run: {FFMPEG_PATH}")
 
-        piper_to_wav(txt, tmp_wav)
+        meta, body = parse_job_file(txt, base)
+        piper_to_wav(body, tmp_wav)
         wav_to_mp3(tmp_wav, tmp_mp3)
         tmp_mp3.replace(out_mp3)
+        finalize_output(out_mp3, meta)
         print(f"[✓] wrote {out_mp3.name}")
     finally:
         for p in (tmp_wav, tmp_mp3):

@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 import pyttsx3
+from job_utils import parse_job_file, finalize_output
 
 ROOT = Path(__file__).resolve().parents[1]
 IN_DIR = ROOT / "jobs" / "incoming"
@@ -82,18 +83,13 @@ def pick_voice(engine: pyttsx3.Engine, substr: str) -> Optional[str]:
             break
     return chosen
 
-def synth_to_wav(text_path: Path, wav_path: Path):
+def synth_to_wav(text: str, wav_path: Path):
     engine = pyttsx3.init()  # SAPI5 on Windows
-    # Voice selection
     vid = pick_voice(engine, VOICE_SUBSTR)
     if vid:
         engine.setProperty("voice", vid)
-    # Speed & volume
     engine.setProperty("rate", RATE_WPM)
     engine.setProperty("volume", VOLUME)
-    # Load text
-    text = text_path.read_text(encoding="utf-8", errors="replace")
-    # Save to WAV (blocking until done)
     engine.save_to_file(text, str(wav_path))
     engine.runAndWait()
 
@@ -109,7 +105,8 @@ def process_job(txt_path: Path):
 
     try:
         print(f"[+] Synthesizing: {txt_path.name}")
-        synth_to_wav(txt_path, wav_tmp)
+        meta, body = parse_job_file(txt_path, base)
+        synth_to_wav(body, wav_tmp)
 
         if not ffmpeg_exists():
             print("[!] ffmpeg not found; install it or add to PATH.")
@@ -120,6 +117,7 @@ def process_job(txt_path: Path):
 
         # Atomic move: tmp -> outgoing
         mp3_tmp.replace(out_mp3)
+        finalize_output(out_mp3, meta)
         print(f"[✓] Wrote: {out_mp3.name}")
 
     except Exception as e:
