@@ -1,13 +1,22 @@
 # NiftyTTS
 
-NiftyTTS converts web pages or raw text into MP3 audio files.  The
-project provides a small [FastAPI](https://fastapi.tiangolo.com/) web
+NiftyTTS is designed for converting stories from nifty.org into MP3 audio files.
+The project provides a small [FastAPI](https://fastapi.tiangolo.com/) web
 application that fetches a URL, extracts text, and posts conversion jobs
 into a `jobs` directory.  Background **watcher** processes pick up those
 jobs and run a text‑to‑speech engine to produce MP3 files.
 
 The repository includes helper scripts and a Docker image so the service
 can run entirely locally or inside a container.
+
+Note that this is designed to work with the 'old' nifty, not the new beta.
+
+The tampermonkey script can be imported, and it will give you a "TTS" button
+next to any link it thinks is a story (it's pretty stupid about what constitutes
+a story).
+
+Output folders will be based on the series name (or category name if the story is
+not serial) 
 
 ## Architecture
 
