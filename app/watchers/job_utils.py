@@ -62,7 +62,8 @@ def finalize_output(mp3_path: Path, meta: dict) -> None:
         tags["title"] = meta["subject"]
     if meta.get("track") is not None:
         tags["tracknumber"] = str(meta["track"])
-    tags.save()
+    # Write a v2.3 tag and include a v1 tag for broader player compatibility
+    tags.save(v1=2, v2_version=3)
 
     date_str = meta.get("date")
     if isinstance(date_str, str) and date_str:
