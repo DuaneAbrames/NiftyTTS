@@ -4,6 +4,7 @@ import time
 import asyncio
 from pathlib import Path
 import traceback
+import json
 import edge_tts
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,8 +33,8 @@ def ensure_dirs():
         except Exception:
             pass
 
-def write_err(base: str, msg: str, exc: BaseException | None = None, text_sample: str = ""):
-    err = OUT_DIR / f"{base}.err.txt"  # put next to outputs so you see it on host volume
+def write_err(base: str, msg: str, exc: BaseException | None = None, text_sample: str = "", err: Path | None = None):
+    err = err or (OUT_DIR / f"{base}.err.txt")
     blob = [f"ERROR: {msg}"]
     if exc:
         blob.append("\nTRACEBACK:\n" + "".join(traceback.format_exception(exc)))
@@ -41,6 +42,22 @@ def write_err(base: str, msg: str, exc: BaseException | None = None, text_sample
         blob.append("\nTEXT SAMPLE (first 400 chars):\n" + text_sample[:400])
     err.write_text("\n\n".join(blob), encoding="utf-8")
     print(f"[x] {base}: {msg}. Details -> {err.name}")
+
+
+def out_paths(base: str) -> tuple[Path, Path]:
+    meta = IN_DIR / f"{base}.json"
+    out_mp3 = OUT_DIR / f"{base}.mp3"
+    if meta.exists():
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+            rel = data.get("output_rel")
+            if rel:
+                out_mp3 = OUT_DIR / rel
+        except Exception:
+            pass
+    out_mp3.parent.mkdir(parents=True, exist_ok=True)
+    err_file = out_mp3.with_suffix(".err.txt")
+    return out_mp3, err_file
 
 async def synth_to_mp3(txt: str, out_mp3: Path) -> int:
     """
@@ -91,8 +108,7 @@ def main():
     while True:
         for txt_path in IN_DIR.glob("*.txt"):
             base = txt_path.stem
-            out_mp3 = OUT_DIR / f"{base}.mp3"
-            err_file = OUT_DIR / f"{base}.err.txt"
+            out_mp3, err_file = out_paths(base)
 
             # Skip if we already processed this base, or there is a final (or error) file present
             if base in seen or (out_mp3.exists() and out_mp3.stat().st_size > 0) or (err_file.exists() and err_file.stat().st_size > 0):
@@ -104,7 +120,7 @@ def main():
             print(f"[+] {base}: text_len={len(txt)}")
 
             if len(txt) == 0:
-                write_err(base, "Empty text after preprocessing", None, raw)
+                write_err(base, "Empty text after preprocessing", None, raw, err_file)
                 continue
 
             start = time.time()
@@ -121,7 +137,7 @@ def main():
                     except Exception:
                         pass
             except Exception as e:
-                write_err(base, "Exception during synthesis", e, txt)
+                write_err(base, "Exception during synthesis", e, txt, err_file)
 
         time.sleep(POLL_INTERVAL)
 

@@ -4,6 +4,10 @@ import time
 import traceback
 from pathlib import Path
 
+import shutil
+import json
+
+
 IN_DIR = Path(__file__).resolve().parents[1] / "jobs" / "incoming"
 OUT_DIR = Path(__file__).resolve().parents[1] / "jobs" / "outgoing"
 
@@ -38,6 +42,21 @@ def main():
     seen = set()
 
     print(f"Watching {IN_DIR} → {OUT_DIR}")
+
+    def out_path(base: str) -> Path:
+        meta = IN_DIR / f"{base}.json"
+        out = OUT_DIR / f"{base}.mp3"
+        if meta.exists():
+            try:
+                data = json.loads(meta.read_text(encoding="utf-8"))
+                rel = data.get("output_rel")
+                if rel:
+                    out = OUT_DIR / rel
+            except Exception:
+                pass
+        out.parent.mkdir(parents=True, exist_ok=True)
+        return out
+
     while True:
         for txt in IN_DIR.glob("*.txt"):
             base = txt.stem
@@ -46,6 +65,7 @@ def main():
             if base in seen or (out.exists() and out.stat().st_size > 0) or (err_file.exists() and err_file.stat().st_size > 0):
                 continue
             seen.add(base)
+            out = out_path(base)
 
             raw = txt.read_text(encoding="utf-8", errors="replace")
             text = raw.strip()

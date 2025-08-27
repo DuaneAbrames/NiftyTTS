@@ -19,6 +19,7 @@ import subprocess
 import traceback
 from pathlib import Path
 from typing import Optional
+import json
 
 import pyttsx3
 
@@ -105,7 +106,6 @@ def synth_to_wav(text: str, wav_path: Path):
     engine.save_to_file(text, str(wav_path))
     engine.runAndWait()
 
-
 def write_err(base: str, msg: str, exc: BaseException | None = None, text_sample: str = ""):
     err = OUT_DIR / f"{base}.err.txt"
     blob = [f"ERROR: {msg}"]
@@ -123,6 +123,7 @@ def process_job(txt_path: Path):
     err_file = OUT_DIR / f"{base}.err.txt"
     if out_mp3.exists() and out_mp3.stat().st_size > 0 or (err_file.exists() and err_file.stat().st_size > 0):
         return
+
 
     wav_tmp = TMP_DIR / f"{base}.wav"
     mp3_tmp = TMP_DIR / f"{base}.mp3"
@@ -194,7 +195,6 @@ def main():
             seen.add(base)
             process_job(txt)
         time.sleep(POLL_INTERVAL)
-
 
 if __name__ == "__main__":
     main()

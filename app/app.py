@@ -1,6 +1,5 @@
 import re
 import time
-import uuid
 import json
 import os
 from pathlib import Path
@@ -70,8 +69,49 @@ def render(body: str) -> HTMLResponse:
 
 # --------- helpers ---------
 
+def _meta_for(base_name: str) -> dict:
+    meta_path = IN_DIR / f"{base_name}.json"
+    try:
+        return json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def output_relpath_from_url(url: str) -> Path:
+    parsed = urlparse(url)
+    parts = [p for p in parsed.path.strip("/").split("/") if p]
+    file_part = parts[-1] if parts else parsed.netloc
+    folder_slug = parts[-2] if len(parts) >= 2 else file_part
+    if "." in file_part:
+        file_part = file_part.rsplit(".", 1)[0]
+
+    def slug_to_title(slug: str) -> str:
+        return slug.replace("-", " ").strip().title()
+
+    m = re.match(r"^(.*?)(?:-(\d+))?$", file_part)
+    base_slug = m.group(1)
+    digits = m.group(2)
+    title = slug_to_title(base_slug)
+    folder = slug_to_title(folder_slug)
+    if digits:
+        fname = f"{title} {int(digits):03d}.mp3"
+    else:
+        fname = f"{title}.mp3"
+    return Path(folder) / fname
+
+
+def mp3_path_for(base_name: str) -> Path:
+    meta = _meta_for(base_name)
+    rel = meta.get("output_rel")
+    if rel:
+        p = OUT_DIR / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return p
+    return OUT_DIR / f"{base_name}.mp3"
+
+
 def err_path_for(base_name: str) -> Path:
-    return OUT_DIR / f"{base_name}.err.txt"
+    return mp3_path_for(base_name).with_suffix(".err.txt")
 
 def read_error_text(err_path: Path, max_chars: int = 8000) -> str:
     try:
@@ -186,13 +226,10 @@ def build_job(url: str, text: str) -> str:
         "url": url,
         "created_ts": int(time.time()),
         "text_file": text_path.name,
+        "output_rel": output_relpath_from_url(url).as_posix(),
     }
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return base_name
-
-
-def mp3_path_for(base_name: str) -> Path:
-    return OUT_DIR / f"{base_name}.mp3"
 
 async def _sleep(seconds: float):
     import asyncio
