@@ -1,12 +1,18 @@
-# watchers/tts_watch.py
+# watchers/tts_watch_stub.py
+import os
 import time
+import traceback
 from pathlib import Path
+
 import shutil
 from job_utils import parse_job_file, finalize_output
 import json
 
+
 IN_DIR = Path(__file__).resolve().parents[1] / "jobs" / "incoming"
 OUT_DIR = Path(__file__).resolve().parents[1] / "jobs" / "outgoing"
+
+POLL_INTERVAL = float(os.environ.get("NIFTYTTS_POLL_INTERVAL", "0.5"))
 
 def write_stub_mp3(target: Path):
     # Tiny silent MP3 (1 second of silence at 11025 Hz, CBR 32kbps) – good enough for testing.
@@ -18,6 +24,18 @@ def write_stub_mp3(target: Path):
         "00000000"
     )
     target.write_bytes(data)
+    
+
+def write_err(base: str, msg: str, exc: BaseException | None = None, text_sample: str = ""):
+    err = OUT_DIR / f"{base}.err.txt"
+    blob = [f"ERROR: {msg}"]
+    if exc:
+        blob.append("\nTRACEBACK:\n" + "".join(traceback.format_exception(exc)))
+    if text_sample:
+        blob.append("\nTEXT SAMPLE (first 400 chars):\n" + text_sample[:400])
+    err.write_text("\n\n".join(blob), encoding="utf-8")
+    print(f"[x] {base}: {msg}. Details -> {err.name}")
+
 
 def main():
     IN_DIR.mkdir(parents=True, exist_ok=True)
@@ -42,22 +60,36 @@ def main():
 
     while True:
         for txt in IN_DIR.glob("*.txt"):
-            base = txt.stem  # e.g. example.com-abcdef1234567890
-            if base in seen:
+            base = txt.stem
+            out = OUT_DIR / f"{base}.mp3"
+            err_file = OUT_DIR / f"{base}.err.txt"
+            if base in seen or (out.exists() and out.stat().st_size > 0) or (err_file.exists() and err_file.stat().st_size > 0):
                 continue
             seen.add(base)
             out = out_path(base)
 
-            # If an mp3 already exists, skip
-            if out.exists():
+            raw = txt.read_text(encoding="utf-8", errors="replace")
+            text = raw.strip()
+            if len(text) == 0:
+                write_err(base, "Empty text after preprocessing", None, raw)
                 continue
+            try:
+                meta, _ = parse_job_file(txt, base)
+                write_stub_mp3(out)
+                finalize_output(out, meta)
+                print(f"Created {out.name}")
+                write_stub_mp3(out)
+                print(f"Created {out.name}")
+                if err_file.exists():
+                    try:
+                        err_file.unlink()
+                        print(f"[-] {base}: cleared stale error log")
+                    except Exception:
+                        pass
+            except Exception as e:
+                write_err(base, "Failed to write stub MP3", e, text)
 
-            meta, _ = parse_job_file(txt, base)
-            write_stub_mp3(out)
-            finalize_output(out, meta)
-            print(f"Created {out.name}")
-
-        time.sleep(1.0)
+        time.sleep(POLL_INTERVAL)
 
 if __name__ == "__main__":
     main()
