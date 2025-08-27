@@ -18,12 +18,11 @@ a story).
 Output folders will be based on the series name (or category name if the story is
 not serial) 
 
-    [!WARNING]
-    In no way does this project encourage anyone to violate the author's 
-    copyright in their stories.  It may only be used to create audio files
-    for the user's own **PERSONAL** use.  If you make files with this and
-    distribute them on the internet, an angry skunk will appear in your 
-    room and cause you to regret the fact of your birth!
+   - In no way does this project encourage anyone to violate the author's 
+   - copyright in their stories.  It may only be used to create audio files
+   - for the user's own **PERSONAL** use.  If you make files with this and
+   - distribute them on the internet, an angry skunk will appear in your 
+   - room and cause you to regret the fact of your birth!
 
 ## Architecture
 
