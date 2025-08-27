@@ -1,12 +1,6 @@
 # NiftyTTS
 
-```diff
-- In no way does this project encourage anyone to violate the author's 
-- copyright in their stories.  It may only be used to create audio files
-- for the user's own **PERSONAL** use.  If you make files with this and
-- distribute them on the internet, an angry skunk will appear in your 
-- room and cause you to regret the fact of your birth!
-```
+## :warning: In no way does this project encourage anyone to violate the author's copyright in their stories.  It may only be used to create audio files for the user's own **PERSONAL** use.  If you make files with this and distribute them on the internet a sleep-deprived raccoon armed with a kazoo will invade your home and narrate your every failure in song!  
 
 NiftyTTS is designed for converting stories from nifty.org into MP3 audio files.
 The project provides a small [FastAPI](https://fastapi.tiangolo.com/) web
