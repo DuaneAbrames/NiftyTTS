@@ -30,8 +30,6 @@ app = FastAPI(title="NiftyTTS – Simple 2-Step")
 
 SAFE_SCHEMES = {"http", "https"}
 
-from string import Template
-
 HTML_TEMPLATE = Template(r"""<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
