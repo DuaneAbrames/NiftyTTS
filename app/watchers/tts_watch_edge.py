@@ -13,12 +13,14 @@ OUT_DIR = ROOT / "jobs" / "outgoing"
 VOICE = os.environ.get("NIFTYTTS_EDGE_VOICE", "en-US-AriaNeural")
 RATE = os.environ.get("NIFTYTTS_EDGE_RATE", "+0%")
 PITCH = os.environ.get("NIFTYTTS_EDGE_PITCH", "+0Hz")
-# Explicitly ask for MP3:
+
+# Explicit MP3 format (supported choices include e.g. audio-16khz-32kbitrate-mono-mp3)
 OUTPUT_FORMAT = os.environ.get("NIFTYTTS_EDGE_FORMAT", "audio-24khz-48kbitrate-mono-mp3")
 
 POLL_INTERVAL = float(os.environ.get("NIFTYTTS_POLL_INTERVAL", "0.5"))
 SYNTH_TIMEOUT = int(os.environ.get("NIFTYTTS_SYNTH_TIMEOUT", "600"))  # seconds
-MIN_MP3_BYTES = int(os.environ.get("NIFTYTTS_MIN_MP3_BYTES", "1024")) # consider smaller as failure
+MIN_MP3_BYTES = int(os.environ.get("NIFTYTTS_MIN_MP3_BYTES", "1024"))
+
 
 def ensure_dirs():
     IN_DIR.mkdir(parents=True, exist_ok=True)
@@ -40,24 +42,37 @@ def write_err(base: str, msg: str, exc: BaseException | None = None, text_sample
     err.write_text("\n\n".join(blob), encoding="utf-8")
     print(f"[x] {base}: {msg}. Details -> {err.name}")
 
-async def synth_to_mp3(txt: str, tmp_mp3: Path):
+async def synth_to_mp3(txt: str, out_mp3: Path) -> int:
     """
-    Stream audio chunks from edge-tts and write them to tmp_mp3.
+    Synthesize to OUT_DIR/<name>.mp3.tmp then os.replace() to final.
+    Returns number of bytes written.
+    Compatible with edge-tts variants by passing format to .save().
     """
-    communicate = edge_tts.Communicate(
-        txt, VOICE, rate=RATE, pitch=PITCH, output_format=OUTPUT_FORMAT
-    )
-    wrote = 0
-    # Stream with a timeout
-    async def _do():
-        nonlocal wrote
-        with open(tmp_mp3, "wb") as f:
-            async for chunk in communicate.stream():
-                if chunk["type"] == "audio":
-                    f.write(chunk["data"])
-                    wrote += len(chunk["data"])
-    await asyncio.wait_for(_do(), timeout=SYNTH_TIMEOUT)
-    return wrote
+    tmp_mp3 = out_mp3.with_name(out_mp3.name + ".tmp")
+
+    # Build communicator (NO format here; some versions don't accept it)
+    communicate = edge_tts.Communicate(txt, VOICE, rate=RATE, pitch=PITCH)
+
+    # Try preferred signature: save(format=...)
+    try:
+        await asyncio.wait_for(communicate.save(str(tmp_mp3), format=OUTPUT_FORMAT), timeout=SYNTH_TIMEOUT)
+    except TypeError:
+        # Fallback for older/newer variants that use a different kw or no kw
+        await asyncio.wait_for(communicate.save(str(tmp_mp3)), timeout=SYNTH_TIMEOUT)
+
+    # Sanity checks
+    if not tmp_mp3.exists():
+        raise RuntimeError("edge-tts produced no file")
+    size = tmp_mp3.stat().st_size
+    if size < MIN_MP3_BYTES:
+        # Clean up and raise to let caller write an .err.txt
+        try: tmp_mp3.unlink()
+        except: pass
+        raise RuntimeError(f"edge-tts produced a too-small MP3 ({size} bytes)")
+
+    os.replace(tmp_mp3, out_mp3)
+    return size
+
 
 def main():
     ensure_dirs()
@@ -89,7 +104,7 @@ def main():
 
             start = time.time()
             try:
-                bytes_written = loop.run_until_complete(synth_to_mp3(txt, tmp_mp3))
+                bytes_written = loop.run_until_complete(synth_to_mp3(txt, out_mp3))
                 dur = time.time() - start
 
                 # Sanity checks
