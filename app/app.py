@@ -336,13 +336,22 @@ def form_step2(u: str, text: str) -> str:
   <input type="hidden" name="u" value="{safe_u}">
   <label>
     <div><b>Step 2:</b> Edit the text below</div>
-    <textarea name="text" required>{html_escape(text)}</textarea>
+    <textarea id="text" name="text" required>{html_escape(text)}</textarea>
   </label>
+  <div class="row">
+    <button type="button" id="scroll-top">Scroll to Top</button>
+    <button type="button" id="scroll-bottom">Scroll to Bottom</button>
+  </div>
   <div class="row">
     <button type="submit">Create Audio</button>
     <a class="btn" href="/">Start over</a>
   </div>
 </form>
+<script>
+  const ta = document.getElementById('text');
+  document.getElementById('scroll-top').addEventListener('click', () => ta.scrollTop = 0);
+  document.getElementById('scroll-bottom').addEventListener('click', () => ta.scrollTop = ta.scrollHeight);
+</script>
 """
 
 def html_escape(s: str) -> str:
