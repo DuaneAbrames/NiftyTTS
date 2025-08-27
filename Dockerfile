@@ -7,8 +7,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY app/ /app/
 # Install Python deps and Piper TTS binary
-RUN pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir piper-tts
+RUN pip install --no-cache-dir -r requirements.txt 
 
 # Location for Piper voice models; mount host folder here
 RUN mkdir -p /models
