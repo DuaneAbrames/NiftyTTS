@@ -6,4 +6,4 @@ pyttsx3
 edge-tts
 python-multipart
 mutagen
-
+piper-tts
