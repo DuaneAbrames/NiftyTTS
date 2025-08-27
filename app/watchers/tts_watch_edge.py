@@ -6,6 +6,7 @@ from pathlib import Path
 import traceback
 import json
 import edge_tts
+from job_utils import parse_job_file, finalize_output
 
 ROOT = Path(__file__).resolve().parents[1]
 IN_DIR = ROOT / "jobs" / "incoming"
@@ -115,12 +116,11 @@ def main():
                 continue
             seen.add(base)
 
-            raw = txt_path.read_text(encoding="utf-8", errors="replace")
-            txt = raw.strip()
+            meta, txt = parse_job_file(txt_path, base)
             print(f"[+] {base}: text_len={len(txt)}")
 
             if len(txt) == 0:
-                write_err(base, "Empty text after preprocessing", None, raw, err_file)
+                write_err(base, "Empty text after preprocessing", None, txt)
                 continue
 
             start = time.time()
@@ -128,6 +128,7 @@ def main():
                 bytes_written = loop.run_until_complete(synth_to_mp3(txt, out_mp3))
                 dur = time.time() - start
                 print(f"[✓] {base}: finalized {out_mp3.name} ({bytes_written} bytes) in {dur:.1f}s")
+                finalize_output(out_mp3, meta)
 
                 # Clear stale error file if present
                 if err_file.exists():

@@ -22,6 +22,7 @@ from typing import Optional
 import json
 
 import pyttsx3
+from job_utils import parse_job_file, finalize_output
 
 ROOT = Path(__file__).resolve().parents[1]
 IN_DIR = ROOT / "jobs" / "incoming"
@@ -95,7 +96,6 @@ def pick_voice(engine: pyttsx3.Engine, substr: str) -> Optional[str]:
             break
     return chosen
 
-
 def synth_to_wav(text: str, wav_path: Path):
     engine = pyttsx3.init()
     vid = pick_voice(engine, VOICE_SUBSTR)
@@ -136,7 +136,9 @@ def process_job(txt_path: Path):
 
     try:
         print(f"[+] Synthesizing: {txt_path.name}")
-        synth_to_wav(text, wav_tmp)
+
+        meta, body = parse_job_file(txt_path, base)
+        synth_to_wav(body, wav_tmp)
 
         if not ffmpeg_exists():
             raise RuntimeError(f"ffmpeg not found or failed to run: {FFMPEG_PATH}")
@@ -147,6 +149,7 @@ def process_job(txt_path: Path):
             raise RuntimeError(f"Generated MP3 too small ({size} bytes)")
 
         mp3_tmp.replace(out_mp3)
+        finalize_output(out_mp3, meta)
         print(f"[✓] Wrote: {out_mp3.name}")
 
         if err_file.exists():

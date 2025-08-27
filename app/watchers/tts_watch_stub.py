@@ -5,6 +5,7 @@ import traceback
 from pathlib import Path
 
 import shutil
+from job_utils import parse_job_file, finalize_output
 import json
 
 
@@ -72,8 +73,11 @@ def main():
             if len(text) == 0:
                 write_err(base, "Empty text after preprocessing", None, raw)
                 continue
-
             try:
+                meta, _ = parse_job_file(txt, base)
+                write_stub_mp3(out)
+                finalize_output(out, meta)
+                print(f"Created {out.name}")
                 write_stub_mp3(out)
                 print(f"Created {out.name}")
                 if err_file.exists():
@@ -86,7 +90,6 @@ def main():
                 write_err(base, "Failed to write stub MP3", e, text)
 
         time.sleep(POLL_INTERVAL)
-
 
 if __name__ == "__main__":
     main()

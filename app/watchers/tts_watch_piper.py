@@ -19,7 +19,9 @@ import time
 import subprocess
 import traceback
 from pathlib import Path
+from job_utils import parse_job_file, finalize_output
 import json
+
 
 ROOT = Path(__file__).resolve().parents[1]
 IN_DIR = ROOT / "jobs" / "incoming"
@@ -142,13 +144,15 @@ def process_job(txt: Path):
             raise RuntimeError(f"ffmpeg not found or failed to run: {FFMPEG_PATH}")
         if not Path(PIPER_MODEL).is_file():
             raise FileNotFoundError(f"Piper model not found: {PIPER_MODEL}")
+        meta, body = parse_job_file(txt, base)
+        piper_to_wav(body, tmp_wav)
 
-        piper_to_wav(text, tmp_wav)
         wav_to_mp3(tmp_wav, tmp_mp3)
         size = tmp_mp3.stat().st_size
         if size < MIN_MP3_BYTES:
             raise RuntimeError(f"Generated MP3 too small ({size} bytes)")
         tmp_mp3.replace(out_mp3)
+        finalize_output(out_mp3, meta)
         print(f"[✓] wrote {out_mp3.name}")
 
         if err_file.exists():
