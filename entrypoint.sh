@@ -19,7 +19,7 @@ case "$WATCHER" in
     WATCH_CMD=(python watchers/tts_watch_piper.py)
     ;;
   local|sapi|LOCAL)
-    WATCH_CMD=(python watchers/tts_watch_local.py)
+    WATCH_CMD=(python watchers/tts_watch_pyttsx.py)
     ;;
   *)
     echo "[entrypoint] Unknown BACKEND '${WATCHER}', falling back to 'edge'"
