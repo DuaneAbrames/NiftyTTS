@@ -25,7 +25,9 @@ TMP_DIR = ROOT / "jobs" / "outgoing"
 VOICE = os.environ.get("NIFTYTTS_EDGE_VOICE", "en-US-GuyNeural")
 RATE = os.environ.get("NIFTYTTS_EDGE_RATE", "+0%")
 PITCH = os.environ.get("NIFTYTTS_EDGE_PITCH", "+0Hz")
-POLL_INTERVAL = 0.5
+POLL_INTERVAL = float(os.environ.get("NIFTYTTS_POLL_INTERVAL", "0.5"))
+SYNTH_TIMEOUT = int(os.environ.get("NIFTYTTS_SYNTH_TIMEOUT", "600"))
+
 
 def ensure_dirs():
     IN_DIR.mkdir(parents=True, exist_ok=True)
@@ -39,12 +41,19 @@ def ensure_dirs():
             pass
 
 async def synth_file(text_path: Path, out_mp3: Path):
-    tmp_mp3 = TMP_DIR / (out_mp3.name + ".tmp")
-    text = text_path.read_text(encoding="utf-8", errors="replace")
-    communicate = edge_tts.Communicate(text, VOICE, rate=RATE, pitch=PITCH)
-    # edge-tts writes MP3 directly
-    await communicate.save(str(tmp_mp3))
-    tmp_mp3.replace(out_mp3)
+    # temp file in same dir to avoid cross-device errors
+    tmp_mp3 = out_mp3.with_name(out_mp3.name + ".tmp")
+
+    txt = text_path.read_text(encoding="utf-8", errors="replace")
+
+    communicate = edge_tts.Communicate(txt, VOICE, rate=RATE, pitch=PITCH)
+    # Await directly, with timeout
+    await asyncio.wait_for(communicate.save(str(tmp_mp3)), timeout=SYNTH_TIMEOUT)
+
+    if not tmp_mp3.exists() or tmp_mp3.stat().st_size == 0:
+        raise RuntimeError(f"Synthesis produced empty file: {tmp_mp3}")
+
+    os.replace(tmp_mp3, out_mp3)
 
 def main():
     ensure_dirs()
