@@ -72,6 +72,33 @@ def render(body: str) -> HTMLResponse:
 
 # --------- helpers ---------
 
+def err_path_for(base_name: str) -> Path:
+    return OUT_DIR / f"{base_name}.err.txt"
+
+def read_error_text(err_path: Path, max_chars: int = 8000) -> str:
+    try:
+        raw = err_path.read_text(encoding="utf-8", errors="replace")
+    except Exception as e:
+        return f"(Failed to read error file: {e})"
+    # trim very large errors
+    return raw[:max_chars] + ("…\n(truncated)" if len(raw) > max_chars else "")
+
+def job_error_block(base_name: str, url: str | None, err_text: str) -> str:
+    safe_url = html_escape(url or "(unknown)")
+    dl = f"/error/{base_name}"
+    return f"""
+<div class="card">
+  <p class="warn"><b>There was an error while creating your audio.</b></p>
+  <p class="muted">Source: <span class="mono">{safe_url}</span></p>
+  <p><a class="btn" href="{dl}">Download error log</a> <a class="btn" href="/">Start over</a></p>
+  <details open>
+    <summary>Error details</summary>
+    <pre class="mono" style="white-space:pre-wrap; max-height: 50vh; overflow:auto;">{html_escape(err_text)}</pre>
+  </details>
+</div>
+"""
+
+
 def sanitize_filename(name: str) -> str:
     name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("._")
     return name or "file"
@@ -353,34 +380,31 @@ async def index(u: str | None = Query(default=None, description="URL to convert"
 
 @app.post("/submit", response_class=HTMLResponse)
 async def submit(u: str = Form(...), text: str = Form(...)):
-    """
-    Step 3 (POST): write job from edited text, then wait briefly for MP3.
-    """
-    if not u:
-        raise HTTPException(400, "Missing URL (u).")
-    if not isinstance(text, str) or len(text.encode("utf-8")) > MAX_TEXTAREA_BYTES:
-        raise HTTPException(413, "Submitted text is too large.")
-
+    # ... existing validation ...
     base_name = build_job(u, text)
     out_mp3 = mp3_path_for(base_name)
+    err_path = err_path_for(base_name)
 
-    # Wait/poll for watcher to produce MP3
     start = time.time()
     while time.time() - start < TIMEOUT_SECONDS:
+        # NEW: show error as soon as it appears
+        if err_path.exists() and err_path.stat().st_size > 0:
+            return render(job_error_block(base_name, u, read_error_text(err_path)))
+
         if out_mp3.exists() and out_mp3.stat().st_size > 0:
             return render(job_ready_block(base_name, u))
+
         await _sleep(POLL_INTERVAL)
 
-    # Timed out; show wait block with status link
+    # timed out
     return render(job_wait_block(base_name))
 
 @app.get("/status/{base_name}", response_class=HTMLResponse)
 def status(base_name: str, request: Request):
-    """
-    Status page; if ready, show inline player + download link.
-    """
     out_mp3 = mp3_path_for(base_name)
-    # Try to pull original URL (best-effort)
+    err_path = err_path_for(base_name)
+
+    # Try to pull original URL
     url = None
     for meta in IN_DIR.glob(f"{base_name}.json"):
         try:
@@ -389,12 +413,21 @@ def status(base_name: str, request: Request):
             pass
         break
 
-    if out_mp3.exists() and out_mp3.stat().st_size > 0:
-        # show audio player + links
+    if err_path.exists() and err_path.stat().st_size > 0:
+        body = job_error_block(base_name, url, read_error_text(err_path))
+    elif out_mp3.exists() and out_mp3.stat().st_size > 0:
         body = job_ready_block(base_name, url or "(unknown)")
     else:
         body = job_wait_block(base_name)
+
     return render(body)
+    
+@app.get("/error/{base_name}")
+def download_error(base_name: str):
+    err_path = err_path_for(base_name)
+    if not err_path.exists() or err_path.stat().st_size == 0:
+        raise HTTPException(404, "No error log found.")
+    return FileResponse(path=err_path, media_type="text/plain", filename=err_path.name)
 
 @app.get("/download/{base_name}")
 def download(base_name: str):
