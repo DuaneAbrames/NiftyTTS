@@ -12,7 +12,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Location for Piper voice models; mount host folder here
 RUN mkdir -p /models
 VOLUME ["/models"]
-ENV NIFTYTTS_PIPER_MODEL=/models
+ENV NIFTYTTS_PIPER_MODEL=/models \
+    NIFTYTTS_UID=99 \
+    NIFTYTTS_GID=100
 
 # Add entrypoint
 COPY entrypoint.sh /app/entrypoint.sh
