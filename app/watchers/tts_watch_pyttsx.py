@@ -1,4 +1,4 @@
-# watchers/tts_watch_local.py
+# watchers/tts_watch_pyttsx.py
 """
 Local TTS watcher for NiftyTTS:
 - Watches jobs/incoming/*.txt
