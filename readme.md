@@ -106,6 +106,10 @@ Generated MP3 files and JSON metadata are written to
 `app/jobs/outgoing`.  Errors are reported in corresponding `.err.txt`
 files.  Temporary job input lives in `app/jobs/incoming`.
 
+For text submissions containing RFC822-style headers, the app extracts the
+`From`, `Subject`, and `Date` values and records them in each job's JSON
+metadata and ID3 tags.
+
 ## License
 
 See `app/LICENSE` for licensing information.

@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from urllib.parse import urlparse
 from datetime import datetime
+from email.parser import Parser
+from email.utils import parseaddr, parsedate_to_datetime
 import httpx
 from bs4 import BeautifulSoup
 from fastapi import FastAPI, Query, HTTPException, Form, Request
@@ -178,9 +180,11 @@ def extract_text_from_response(resp: httpx.Response) -> tuple[str, str]:
 
     raise HTTPException(415, "Unsupported content-type. Please supply a text/plain or HTML page.")
 
-def build_job(url: str, text: str) -> str:
+def build_job(url: str, text: str, headers: dict[str, str] | None = None) -> str:
     """
-    Create a job basename from the URL and current timestamp.
+    Create a job basename from the URL and current timestamp. Optionally embed
+    email-style headers (From/Subject/Date) into the job text and JSON meta.
+
     Example:
       http://www.xxx.com/foo/bar/baz/A totally effed-up story.html
       -> xxx-com-foo-bar-baz-a totally effed-up story (08-25-25@18-31)
@@ -221,13 +225,38 @@ def build_job(url: str, text: str) -> str:
     # Write files
     text_path = IN_DIR / f"{base_name}.txt"
     meta_path = IN_DIR / f"{base_name}.json"
-    text_path.write_text(text, encoding="utf-8")
+
+    body = text
     meta = {
         "url": url,
         "created_ts": int(time.time()),
         "text_file": text_path.name,
         "output_rel": output_relpath_from_url(url).as_posix(),
     }
+
+    if headers:
+        hdr_lines: list[str] = []
+        from_raw = headers.get("from", "").strip()
+        subj_raw = headers.get("subject", "").strip()
+        date_raw = headers.get("date", "").strip()
+        if from_raw:
+            hdr_lines.append(f"From: {from_raw}")
+            from_name = parseaddr(from_raw)[0].strip()
+            if from_name:
+                meta["from"] = from_name
+        if subj_raw:
+            hdr_lines.append(f"Subject: {subj_raw}")
+            meta["subject"] = subj_raw
+        if date_raw:
+            hdr_lines.append(f"Date: {date_raw}")
+            try:
+                meta["date"] = parsedate_to_datetime(date_raw).isoformat()
+            except Exception:
+                meta["date"] = date_raw
+        if hdr_lines:
+            body = "\n".join(hdr_lines) + "\n\n" + body
+
+    text_path.write_text(body, encoding="utf-8")
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
     return base_name
 
@@ -285,29 +314,45 @@ def unwrap_email_wrapped(text: str) -> str:
     return "\n\n".join(out_paras).strip()
 
 
-def strip_leading_email_headers(text: str) -> str:
-    """
-    Remove RFC822-style headers only from the very top of the text.
-    Stops at the first blank line OR the first non 'Header: value' line.
-    Only matches at column 0.
+def strip_leading_email_headers(text: str) -> tuple[str, dict[str, str]]:
+    """Split off RFC822-style headers from the very top of ``text``.
+
+    Returns a tuple of ``(body, headers)`` where ``headers`` is a mapping of
+    header names to their raw values. Only consecutive ``Header: value`` lines
+    starting at column 0 are considered part of the header block. Any folded
+    continuation lines are included.
     """
     t = text.replace("\r\n", "\n").replace("\r", "\n")
     lines = t.split("\n")
 
     header_re = re.compile(r"^[A-Za-z][A-Za-z0-9\-]*:\s.*$")
+    hdr_lines: list[str] = []
     i = 0
     while i < len(lines):
         ln = lines[i]
         if ln == "":
-            # consume the blank line separating headers from body
             i += 1
             break
         if header_re.match(ln):
+            hdr_lines.append(ln)
             i += 1
+            # include folded continuation lines
+            while i < len(lines) and lines[i].startswith((" ", "\t")):
+                hdr_lines.append(lines[i])
+                i += 1
             continue
         break
 
-    return "\n".join(lines[i:]).lstrip("\n")
+    header_blob = "\n".join(hdr_lines)
+    parsed = Parser().parsestr(header_blob)
+    headers = {
+        "from": parsed.get("From", "").strip(),
+        "subject": parsed.get("Subject", "").strip(),
+        "date": parsed.get("Date", "").strip(),
+    }
+
+    body = "\n".join(lines[i:]).lstrip("\n")
+    return body, headers
 
 
 # --------- UI fragments ---------
@@ -326,14 +371,22 @@ def form_step1(prefill: str = "", message: str = "") -> str:
 </form>
 """
 
-def form_step2(u: str, text: str) -> str:
+def form_step2(u: str, text: str, meta: dict | None = None) -> str:
     safe_u = (u or "").replace('"', "&quot;")
+    meta = meta or {}
+    hidden = []
+    for key in ("from", "subject", "date"):
+        val = meta.get(key, "")
+        if val:
+            hidden.append(f'<input type="hidden" name="{key}" value="{html_escape(val)}">')
+    hidden_inputs = "\n  ".join(hidden)
     # textarea contains sanitized text for HTML pages or raw text for text/plain
     return f"""
 <h1>Review &amp; Edit Text</h1>
 <p class="muted">We fetched and sanitized the page text. Make any edits (trim headers/footers, etc.), then submit to synthesize.</p>
 <form method="post" action="/submit">
   <input type="hidden" name="u" value="{safe_u}">
+  {hidden_inputs}
   <label>
     <div><b>Step 2:</b> Edit the text below</div>
     <textarea id="text" name="text" required>{html_escape(text)}</textarea>
@@ -415,17 +468,25 @@ async def index(u: str | None = Query(default=None, description="URL to convert"
 
     text, kind = extract_text_from_response(resp)
 
+    meta: dict[str, str] = {}
+
     # For text/plain only: strip top-of-file headers and unwrap soft-wrapped lines
     if kind == "text":
-        text = strip_leading_email_headers(text)
+        text, meta = strip_leading_email_headers(text)
         text = unwrap_email_wrapped(text)
-        
-    return render(form_step2(u, text))
+
+    return render(form_step2(u, text, meta))
 
 @app.post("/submit", response_class=HTMLResponse)
-async def submit(u: str = Form(...), text: str = Form(...)):
-    # ... existing validation ...
-    base_name = build_job(u, text)
+async def submit(
+    u: str = Form(...),
+    text: str = Form(...),
+    from_hdr: str = Form("", alias="from"),
+    subject_hdr: str = Form("", alias="subject"),
+    date_hdr: str = Form("", alias="date"),
+):
+    headers = {"from": from_hdr, "subject": subject_hdr, "date": date_hdr}
+    base_name = build_job(u, text, headers)
     out_mp3 = mp3_path_for(base_name)
     err_path = err_path_for(base_name)
 
