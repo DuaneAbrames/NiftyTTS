@@ -96,7 +96,8 @@ def pick_voice(engine: pyttsx3.Engine, substr: str) -> Optional[str]:
             break
     return chosen
 
-def synth_to_wav(text: str, wav_path: Path):
+def synth_to_wav(text: str, wav_path: Path) -> str:
+    """Synthesize WAV and return the voice label used (name or id)."""
     engine = pyttsx3.init()
     vid = pick_voice(engine, VOICE_SUBSTR)
     if vid:
@@ -105,6 +106,17 @@ def synth_to_wav(text: str, wav_path: Path):
     engine.setProperty("volume", VOLUME)
     engine.save_to_file(text, str(wav_path))
     engine.runAndWait()
+    # Determine used voice label
+    try:
+        used_id = engine.getProperty("voice")
+        name = None
+        for v in engine.getProperty("voices"):
+            if getattr(v, "id", None) == used_id:
+                name = getattr(v, "name", None)
+                break
+        return name or str(used_id)
+    except Exception:
+        return VOICE_SUBSTR or "default"
 
 def write_err(base: str, msg: str, exc: BaseException | None = None, text_sample: str = ""):
     err = OUT_DIR / f"{base}.err.txt"
@@ -152,17 +164,21 @@ def process_job(txt_path: Path):
         print(f"[+] Synthesizing: {txt_path.name}")
 
         meta, body = parse_job_file(txt_path, base)
-        # Enrich with album/track from incoming job JSON if available
+        # Enrich with album/track/url from incoming job JSON if available
         try:
             j = IN_DIR / f"{base}.json"
             if j.exists():
                 data = json.loads(j.read_text(encoding="utf-8"))
-                for k in ("album", "track"):
+                for k in ("album", "track", "url"):
                     if k in data and k not in meta:
                         meta[k] = data[k]
         except Exception:
             pass
-        synth_to_wav(body, wav_tmp)
+        used_voice = synth_to_wav(body, wav_tmp)
+        try:
+            meta["composer"] = f"pyttsx3 TTS - {used_voice}"
+        except Exception:
+            pass
 
         if not ffmpeg_exists():
             raise RuntimeError(f"ffmpeg not found or failed to run: {FFMPEG_PATH}")

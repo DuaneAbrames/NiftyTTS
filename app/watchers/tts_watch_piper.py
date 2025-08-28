@@ -145,14 +145,21 @@ def process_job(txt: Path):
         if not Path(PIPER_MODEL).is_file():
             raise FileNotFoundError(f"Piper model not found: {PIPER_MODEL}")
         meta, body = parse_job_file(txt, base)
-        # Enrich with album/track from incoming job JSON if available
+        # Enrich with album/track/url from incoming job JSON if available
         try:
             j = IN_DIR / f"{base}.json"
             if j.exists():
                 data = json.loads(j.read_text(encoding="utf-8"))
-                for k in ("album", "track"):
+                for k in ("album", "track", "url"):
                     if k in data and k not in meta:
                         meta[k] = data[k]
+        except Exception:
+            pass
+        # Composer tag: backend + voice (derive from model filename)
+        try:
+            from pathlib import Path as _P
+            voice_label = _P(PIPER_MODEL).stem
+            meta["composer"] = f"piper TTS - {voice_label}"
         except Exception:
             pass
         piper_to_wav(body, tmp_wav)

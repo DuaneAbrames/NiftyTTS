@@ -15,6 +15,7 @@ import httpx
 
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3
+from mutagen.id3._frames import TXXX, COMM, TPUB
 from mutagen.id3._util import ID3NoHeaderError
 
 
@@ -79,23 +80,90 @@ def finalize_output(mp3_path: Path, meta: dict) -> None:
 
     _ensure_id3(mp3_path)
     tags = EasyID3(mp3_path)
+    # Basic tags
     if meta.get("from"):
         tags["artist"] = meta["from"]
-    if meta.get("subject"):
-        tags["title"] = meta["subject"]
+    title_val = (meta.get("subject") or "")
+    if title_val:
+        tags["title"] = title_val
     if meta.get("track") is not None:
         tags["tracknumber"] = str(meta["track"])
-    # Album: use provided meta or fallback to output folder name
-    album = meta.get("album")
-    if not album:
+    # Composer: backend + voice label if provided
+    comp = (meta.get("composer") or "").strip()
+    if comp:
         try:
-            album = mp3_path.parent.name
+            tags["composer"] = comp
         except Exception:
-            album = None
-    if album:
-        tags["album"] = album
-    # Write a v2.3 tag and include a v1 tag for broader player compatibility
+            pass
+    # Album should be the story title (or filename stem if missing)
+    album_title = title_val or mp3_path.stem
+    if album_title:
+        tags["album"] = album_title
+    # Fixed metadata per request
+    try:
+        tags["genre"] = ["erotica"]
+    except Exception:
+        pass
+    try:
+        tags["publisher"] = ["nifty.org"]
+    except Exception:
+        pass
+    # Write EasyID3 (v2.3 + ID3v1) first
     tags.save(v1=2, v2_version=3)
+
+    # Now set extended frames not covered (series + long description/publisher fallback)
+    try:
+        id3 = ID3(mp3_path)
+
+        # Series name stored in TXXX:series (prefer explicit meta['album'] as series, else folder)
+        series_name = (meta.get("series") or meta.get("album") or "")
+        if not series_name:
+            try:
+                # Author/Series/Item/Title.mp3 → take grandparent as series if present
+                series_name = mp3_path.parent.parent.name
+            except Exception:
+                series_name = ""
+        # Update existing TXXX:series if present; otherwise add
+        updated_series = False
+        for f in id3.getall("TXXX"):
+            if isinstance(f, TXXX) and str(getattr(f, "desc", "")).lower() == "series":
+                f.text = [series_name]
+                updated_series = True
+                break
+        if series_name and not updated_series:
+            id3.add(TXXX(encoding=3, desc="series", text=[series_name]))
+
+        # Description/comment text with original URL if available
+        url = (meta.get("url") or "").strip()
+        desc_lines = [
+            "This file was converted from a story posted to nifty.org, the original author retains all copyright, and this file may ONLY be used for personal use and not distributed in any way.",
+        ]
+        if url:
+            desc_lines.append("")  # blank line
+            desc_lines.append("")  # second blank line
+            desc_lines.append(f"Original URL:  {url}")
+        desc_text = "\n".join(desc_lines)
+        # Update existing english description/comment if present; else add
+        updated_comm = False
+        for f in id3.getall("COMM"):
+            if isinstance(f, COMM) and str(getattr(f, "lang", "eng")) == "eng" and str(getattr(f, "desc", "")).lower() in ("", "description", "desc"):
+                f.text = [desc_text]
+                # Normalize descriptor
+                f.desc = "description"
+                updated_comm = True
+                break
+        if not updated_comm:
+            id3.add(COMM(encoding=3, lang="eng", desc="description", text=[desc_text]))
+
+        # Ensure publisher present via TPUB if EasyID3 mapping wasn't available
+        has_tpub = any(f.FrameID == "TPUB" for f in id3.values())
+        if not has_tpub:
+            id3.add(TPUB(encoding=3, text=["nifty.org"]))
+
+        id3.save(v2_version=3)
+    except Exception:
+        # Do not block output on extended tag failures
+        pass
 
     date_str = meta.get("date")
     if isinstance(date_str, str) and date_str:
@@ -108,7 +176,8 @@ def finalize_output(mp3_path: Path, meta: dict) -> None:
 
     # Ensure an OPF file exists for this folder capturing series metadata
     try:
-        _ensure_folder_opf(mp3_path.parent, meta | {"album": album or ""})
+        # Pass both series and album to OPF generator; prefer explicit series
+        _ensure_folder_opf(mp3_path.parent, meta | {"series": (meta.get("series") or meta.get("album") or ""), "album": album_title or ""})
     except Exception:
         # OPF creation failures should not block audio output
         pass
@@ -228,7 +297,8 @@ def _ensure_folder_opf(folder: Path, meta: dict) -> None:
     if opf_path.exists():
         return
 
-    series = (meta.get("album") or folder.name or "").strip()
+    # Prefer explicit series in meta, fallback to prior 'album' usage, then folder name
+    series = (meta.get("series") or meta.get("album") or folder.name or "").strip()
     artist = (meta.get("from") or "").strip()
     date_str = (meta.get("date") or "").strip()
     # OPF 2.0 requires a language; default to English if unknown

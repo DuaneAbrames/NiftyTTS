@@ -118,14 +118,19 @@ def main():
             seen.add(base)
 
             meta, txt = parse_job_file(txt_path, base)
-            # Enrich with album/track from incoming job JSON if available
+            # Enrich with album/track/url from incoming job JSON if available
             try:
                 j = IN_DIR / f"{base}.json"
                 if j.exists():
                     data = json.loads(j.read_text(encoding="utf-8"))
-                    for k in ("album", "track"):
+                    for k in ("album", "track", "url"):
                         if k in data and k not in meta:
                             meta[k] = data[k]
+            except Exception:
+                pass
+            # Composer tag: backend + voice
+            try:
+                meta["composer"] = f"edge TTS - {VOICE}"
             except Exception:
                 pass
             print(f"[+] {base}: text_len={len(txt)}")
