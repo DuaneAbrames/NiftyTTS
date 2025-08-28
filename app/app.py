@@ -107,8 +107,12 @@ def output_relpath_from_url(url: str) -> Path:
     if "." in file_part:
         file_part = file_part.rsplit(".", 1)[0]
     m = re.match(r"^(.*?)(?:-(\d+))?$", file_part)
-    base_slug = m.group(1)
-    digits = m.group(2)
+    if m:
+        base_slug = m.group(1)
+        digits = m.group(2)
+    else:
+        base_slug = file_part
+        digits = None
     title = _slug_to_title(base_slug)
     folder = _slug_to_title(folder_slug)
     fname = f"{title} {int(digits):03d}.mp3" if digits else f"{title}.mp3"
@@ -132,8 +136,12 @@ def output_relpath_for(url: str, headers: dict[str, str] | None) -> tuple[Path, 
         file_part = file_part.rsplit(".", 1)[0]
 
     m = re.match(r"^(.*?)(?:-(\d+))?$", file_part)
-    base_slug = m.group(1)
-    digits = m.group(2)
+    if m:
+        base_slug = m.group(1)
+        digits = m.group(2)
+    else:
+        base_slug = file_part
+        digits = None
 
     # Derive fields
     series_title = _slug_to_title(folder_slug) if folder_slug else ""

@@ -19,7 +19,7 @@ import time
 import subprocess
 import traceback
 from pathlib import Path
-from job_utils import parse_job_file, finalize_output
+from job_utils import parse_job_file, finalize_output, download_cover_image
 import json
 
 
@@ -163,6 +163,10 @@ def process_job(txt: Path):
             raise RuntimeError(f"Generated MP3 too small ({size} bytes)")
         tmp_mp3.replace(out_mp3)
         finalize_output(out_mp3, meta)
+        try:
+            download_cover_image(out_mp3.parent)
+        except Exception:
+            pass
         print(f"[✓] wrote {out_mp3.name}")
 
         if err_file.exists():

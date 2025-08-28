@@ -7,6 +7,11 @@ from html import escape as _html_escape
 from email.parser import Parser
 from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
+import subprocess
+import shutil
+import sys
+
+import httpx
 
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3
@@ -106,6 +111,102 @@ def finalize_output(mp3_path: Path, meta: dict) -> None:
         _ensure_folder_opf(mp3_path.parent, meta | {"album": album or ""})
     except Exception:
         # OPF creation failures should not block audio output
+        pass
+
+
+def _is_webp(path: Path) -> bool:
+    try:
+        with open(path, "rb") as f:
+            header = f.read(12)
+        return len(header) >= 12 and header[:4] == b"RIFF" and header[8:12] == b"WEBP"
+    except Exception:
+        return False
+
+
+def _convert_to_png(src_path: Path, dst_path: Path) -> bool:
+    """Convert image at src_path to PNG at dst_path.
+
+    Tries ffmpeg first (present in Docker image). If that fails, tries Pillow if
+    available. Returns True on success, False otherwise.
+    """
+    # Try ffmpeg
+    ffmpeg_path = os.environ.get("NIFTYTTS_FFMPEG_PATH", "ffmpeg")
+    try:
+        proc = subprocess.run([ffmpeg_path, "-y", "-hide_banner", "-loglevel", "error", "-i", str(src_path), str(dst_path)], capture_output=True, check=False, timeout=30)
+        if proc.returncode == 0 and dst_path.exists() and dst_path.stat().st_size > 0:
+            return True
+    except Exception:
+        pass
+
+    # Try Pillow
+    try:
+        from PIL import Image  # type: ignore
+
+        with Image.open(src_path) as im:
+            im.save(dst_path, format="PNG")
+        return dst_path.exists() and dst_path.stat().st_size > 0
+    except Exception:
+        return False
+
+
+def download_cover_image(folder: Path) -> None:
+    """Download a random cover image to folder/cover.png.
+
+    - Uses nekos.best API as a simple image source.
+    - Writes to cover.png and, if bytes are actually WebP, converts to true PNG.
+    - Skips if a non-empty cover.png already exists.
+    """
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        cover_path = folder / "cover.png"
+        if cover_path.exists() and cover_path.stat().st_size > 0:
+            return
+
+        # Fetch a random image URL
+        with httpx.Client(timeout=30.0) as client:
+            r = client.get("https://nekos.best/api/v2/husbando")
+            r.raise_for_status()
+            data = r.json()
+            url = data["results"][0]["url"]
+
+            # Download with browser-like headers
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/115.0 Safari/537.36"
+                ),
+                "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
+                "Referer": "https://nekos.best/",
+            }
+
+            tmp_path = cover_path.with_suffix(".download")
+            with client.stream("GET", url, headers=headers) as resp:
+                resp.raise_for_status()
+                with open(tmp_path, "wb") as f:
+                    for chunk in resp.iter_bytes():
+                        if chunk:
+                            f.write(chunk)
+
+        # If content is actually WebP (even if named .png), convert
+        if _is_webp(tmp_path):
+            conv_tmp = cover_path.with_suffix(".png.tmp")
+            if _convert_to_png(tmp_path, conv_tmp):
+                os.replace(conv_tmp, cover_path)
+                tmp_path.unlink(missing_ok=True)
+                return
+            # Conversion failed; fall back to renaming .webp to make type explicit
+            try:
+                fallback = folder / "cover.webp"
+                os.replace(tmp_path, fallback)
+                return
+            except Exception:
+                pass
+
+        # Not WebP: write as cover.png directly
+        os.replace(tmp_path, cover_path)
+    except Exception:
+        # Do not fail the calling watcher due to cover issues
         pass
 
 

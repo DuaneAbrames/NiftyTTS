@@ -22,7 +22,7 @@ from typing import Optional
 import json
 
 import pyttsx3
-from job_utils import parse_job_file, finalize_output
+from job_utils import parse_job_file, finalize_output, download_cover_image
 
 ROOT = Path(__file__).resolve().parents[1]
 IN_DIR = ROOT / "jobs" / "incoming"
@@ -174,6 +174,10 @@ def process_job(txt_path: Path):
 
         mp3_tmp.replace(out_mp3)
         finalize_output(out_mp3, meta)
+        try:
+            download_cover_image(out_mp3.parent)
+        except Exception:
+            pass
         print(f"[✓] Wrote: {out_mp3.name}")
 
         if err_file.exists():

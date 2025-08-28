@@ -5,7 +5,7 @@ import traceback
 from pathlib import Path
 
 import shutil
-from job_utils import parse_job_file, finalize_output
+from job_utils import parse_job_file, finalize_output, download_cover_image
 import json
 
 
@@ -77,6 +77,10 @@ def main():
                 meta, _ = parse_job_file(txt, base)
                 write_stub_mp3(out)
                 finalize_output(out, meta)
+                try:
+                    download_cover_image(out.parent)
+                except Exception:
+                    pass
                 print(f"Created {out.name}")
                 write_stub_mp3(out)
                 print(f"Created {out.name}")
