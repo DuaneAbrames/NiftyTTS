@@ -9,7 +9,8 @@ from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
 
 from mutagen.easyid3 import EasyID3
-from mutagen.id3 import ID3, ID3NoHeaderError
+from mutagen.id3 import ID3
+from mutagen.id3._util import ID3NoHeaderError
 
 
 def extract_track_number(stem: str) -> int | None:

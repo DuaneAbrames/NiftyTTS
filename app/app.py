@@ -89,7 +89,8 @@ def _sanitize_segment(name: str) -> str:
     Replaces Windows-invalid chars, collapses whitespace, trims trailing dots.
     """
     name = str(name or "").strip()
-    name = re.sub(r"[\\/<>:\\"|?*]+", "_", name)
+    # Replace Windows-invalid filename characters
+    name = re.sub(r'[\\/<>:"|?*]+', "_", name)
     name = re.sub(r"\s+", " ", name).strip(" .")
     return name or "Untitled"
 
