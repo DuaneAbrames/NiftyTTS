@@ -133,12 +133,12 @@ def _ensure_folder_opf(folder: Path, meta: dict) -> None:
         f"    <dc:title>{_xml(series)}</dc:title>\n"
         + (f"    <dc:creator opf:role=\"aut\">{_xml(artist)}</dc:creator>\n" if artist else "")
         + (f"    <dc:date>{_xml(date_str)}</dc:date>\n" if date_str else "")
-        f"    <dc:language>{_xml(language)}</dc:language>\n"
-        f"    <meta name=\"calibre:series\" content=\"{_xml(series)}\"/>\n"
-        "  </metadata>\n"
-        "  <manifest/>\n"
-        "  <spine toc=\"ncx\"/>\n"
-        "</package>\n"
+        + f"    <dc:language>{_xml(language)}</dc:language>\n"
+        + f"    <meta name=\"calibre:series\" content=\"{_xml(series)}\"/>\n"
+        + "  </metadata>\n"
+        + "  <manifest/>\n"
+        + "  <spine toc=\"ncx\"/>\n"
+        + "</package>\n"
     )
     try:
         opf_path.write_text(content, encoding="utf-8")
