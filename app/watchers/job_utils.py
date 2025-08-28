@@ -2,6 +2,8 @@ import json
 import os
 import re
 from datetime import datetime
+import uuid
+from html import escape as _html_escape
 from email.parser import Parser
 from email.utils import parseaddr, parsedate_to_datetime
 from pathlib import Path
@@ -56,7 +58,7 @@ def _ensure_id3(mp3_path: Path) -> None:
 
 
 def finalize_output(mp3_path: Path, meta: dict) -> None:
-    """Write JSON metadata, apply ID3 tags, and touch file mtime."""
+    """Write JSON metadata, apply ID3 tags, create folder OPF, and touch file mtime."""
     json_path = mp3_path.with_suffix(".json")
     json_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -68,6 +70,15 @@ def finalize_output(mp3_path: Path, meta: dict) -> None:
         tags["title"] = meta["subject"]
     if meta.get("track") is not None:
         tags["tracknumber"] = str(meta["track"])
+    # Album: use provided meta or fallback to output folder name
+    album = meta.get("album")
+    if not album:
+        try:
+            album = mp3_path.parent.name
+        except Exception:
+            album = None
+    if album:
+        tags["album"] = album
     # Write a v2.3 tag and include a v1 tag for broader player compatibility
     tags.save(v1=2, v2_version=3)
 
@@ -79,3 +90,58 @@ def finalize_output(mp3_path: Path, meta: dict) -> None:
             os.utime(mp3_path, (ts, ts))
         except Exception:
             pass
+
+    # Ensure an OPF file exists for this folder capturing series metadata
+    try:
+        _ensure_folder_opf(mp3_path.parent, meta | {"album": album or ""})
+    except Exception:
+        # OPF creation failures should not block audio output
+        pass
+
+
+def _xml(txt: str) -> str:
+    return _html_escape(str(txt or ""), quote=True)
+
+
+def _ensure_folder_opf(folder: Path, meta: dict) -> None:
+    """Create a minimal OPF 2.0 file in the given folder if missing.
+
+    The OPF captures high-level metadata parallel to our ID3 tags and uses the
+    folder name as the series title. We intentionally only create the file if it
+    does not already exist so manual edits are preserved.
+    """
+    if not folder or not isinstance(folder, Path):
+        return
+
+    opf_path = folder / "metadata.opf"
+    if opf_path.exists():
+        return
+
+    series = (meta.get("album") or folder.name or "").strip()
+    artist = (meta.get("from") or "").strip()
+    date_str = (meta.get("date") or "").strip()
+    # OPF 2.0 requires a language; default to English if unknown
+    language = (meta.get("language") or "en").strip()
+
+    book_id = f"urn:uuid:{uuid.uuid4()}"
+
+    content = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<package version=\"2.0\" unique-identifier=\"BookId\" xmlns=\"http://www.idpf.org/2007/opf\">\n"
+        "  <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:opf=\"http://www.idpf.org/2007/opf\">\n"
+        f"    <dc:identifier id=\"BookId\">{_xml(book_id)}</dc:identifier>\n"
+        f"    <dc:title>{_xml(series)}</dc:title>\n"
+        + (f"    <dc:creator opf:role=\"aut\">{_xml(artist)}</dc:creator>\n" if artist else "")
+        + (f"    <dc:date>{_xml(date_str)}</dc:date>\n" if date_str else "")
+        f"    <dc:language>{_xml(language)}</dc:language>\n"
+        f"    <meta name=\"calibre:series\" content=\"{_xml(series)}\"/>\n"
+        "  </metadata>\n"
+        "  <manifest/>\n"
+        "  <spine toc=\"ncx\"/>\n"
+        "</package>\n"
+    )
+    try:
+        opf_path.write_text(content, encoding="utf-8")
+    except Exception:
+        # swallow errors; OPF is optional metadata
+        pass
