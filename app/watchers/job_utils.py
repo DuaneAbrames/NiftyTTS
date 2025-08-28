@@ -115,9 +115,10 @@ def finalize_output(mp3_path: Path, meta: dict) -> None:
     try:
         id3 = ID3(mp3_path)
 
-        # Series name stored in TXXX:series (prefer explicit meta['album'] as series, else folder)
+        # Series name stored in TXXX:series (prefer explicit meta['album'] as series).
+        # Only fall back to folder-derived name for series layouts (when a track is present).
         series_name = (meta.get("series") or meta.get("album") or "")
-        if not series_name:
+        if not series_name and meta.get("track") is not None:
             try:
                 # Author/Series/Item/Title.mp3 → take grandparent as series if present
                 series_name = mp3_path.parent.parent.name
@@ -188,6 +189,13 @@ def finalize_output(mp3_path: Path, meta: dict) -> None:
         )
     except Exception:
         # OPF creation failures should not block audio output
+        pass
+
+    # As the last step, normalize permissions/ownership for host access
+    try:
+        _fix_perms_and_ownership()
+    except Exception:
+        # Never block on permission adjustments
         pass
 
 
@@ -362,4 +370,59 @@ def _ensure_folder_opf(folder: Path, meta: dict) -> None:
         opf_path.write_text(content, encoding="utf-8")
     except Exception:
         # swallow errors; OPF is optional metadata
+        pass
+
+
+def _fix_perms_and_ownership(root: Path | None = None) -> None:
+    """Recursively chmod/chown within jobs/ for host access.
+
+    - Sets dirs and files to mode 0o777.
+    - If env `NIFTYTTS_UID/GID` are set (defaults 99/100), attempts to chown.
+    - Silently ignores platforms that do not support chown (e.g., Windows).
+    """
+    try:
+        # Default to the repository's jobs directory
+        if root is None:
+            root = Path(__file__).resolve().parents[1] / "jobs"
+        if not root.exists():
+            return
+
+        mode = 0o777
+        # Use numeric IDs; default mirrors entrypoint.sh
+        uid_str = os.environ.get("NIFTYTTS_UID", "99")
+        gid_str = os.environ.get("NIFTYTTS_GID", "100")
+        try:
+            uid = int(uid_str)
+            gid = int(gid_str)
+        except Exception:
+            uid = -1
+            gid = -1
+
+        # Walk without following symlinks
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            dpath = Path(dirpath)
+            # Directories first
+            try:
+                os.chmod(dpath, mode)
+            except Exception:
+                pass
+            if uid >= 0 and gid >= 0:
+                try:
+                    shutil.chown(dpath, user=uid, group=gid)
+                except Exception:
+                    pass
+            # Files
+            for name in dirnames + filenames:
+                p = dpath / name
+                try:
+                    os.chmod(p, mode)
+                except Exception:
+                    pass
+                if uid >= 0 and gid >= 0:
+                    try:
+                        shutil.chown(p, user=uid, group=gid)
+                    except Exception:
+                        pass
+    except Exception:
+        # Absolutely never block the pipeline on permission issues
         pass

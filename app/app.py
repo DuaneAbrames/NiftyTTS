@@ -129,9 +129,11 @@ def output_relpath_for(url: str, headers: dict[str, str] | None) -> tuple[Path, 
     """
     headers = headers or {}
     parsed = urlparse(url)
-    parts = [p for p in parsed.path.strip("/").split("/") if p]
-    file_part = parts[-1] if parts else parsed.netloc
-    folder_slug = parts[-2] if len(parts) >= 2 else ""
+    # Keep all parts for depth calc; also prepare a non-empty list for convenience
+    all_parts = parsed.path.strip("/").split("/") if parsed.path else []
+    nonempty_parts = [p for p in all_parts if p]
+    file_part = nonempty_parts[-1] if nonempty_parts else parsed.netloc
+    folder_slug = nonempty_parts[-2] if len(nonempty_parts) >= 2 else ""
     if "." in file_part:
         file_part = file_part.rsplit(".", 1)[0]
 
@@ -163,6 +165,24 @@ def output_relpath_for(url: str, headers: dict[str, str] | None) -> tuple[Path, 
     # MP3 filename (do not repeat track since folder has it)
     mp3_name = f"{title_clean}.mp3"
 
+    # Special-case Nifty depth semantics:
+    # - Series URLs: /nifty/SECTION/SUBSECTION/SERIES/Story.html → 4 non-empty folders
+    # - Non-series URLs: /nifty/SECTION/SUBSECTION//Story.html → 3 non-empty folders
+    host = (parsed.netloc or "").lower()
+    host = host[4:] if host.startswith("www.") else host
+    pre_file_depth = max(0, len(nonempty_parts) - 1)  # count folders before file
+    is_nifty = host.endswith("nifty.org") and (nonempty_parts[:1] == ["nifty"])  # path starts with /nifty
+    is_nifty_non_series = is_nifty and pre_file_depth == 3
+
+    if is_nifty_non_series:
+        # Place directly in the author folder: Author/Title.mp3
+        rel = Path(author_dir) / mp3_name
+        extra_meta = {}
+        # Do not set album/series for non-series works
+        # Track is also omitted (rare/non-sensical in this case)
+        return rel, extra_meta
+
+    # Default/series path: Author/Series/Item/Title.mp3 (or Author/Item/Title.mp3 if no series)
     segments = [author_dir]
     if series_dir:
         segments.append(series_dir)
