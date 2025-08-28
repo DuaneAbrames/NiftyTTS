@@ -176,8 +176,16 @@ def finalize_output(mp3_path: Path, meta: dict) -> None:
 
     # Ensure an OPF file exists for this folder capturing series metadata
     try:
-        # Pass both series and album to OPF generator; prefer explicit series
-        _ensure_folder_opf(mp3_path.parent, meta | {"series": (meta.get("series") or meta.get("album") or ""), "album": album_title or ""})
+        # Pass series and ID3 title to OPF generator; prefer explicit series
+        _ensure_folder_opf(
+            mp3_path.parent,
+            meta
+            | {
+                "series": (meta.get("series") or meta.get("album") or ""),
+                "album": album_title or "",
+                "title": title_val or album_title or "",
+            },
+        )
     except Exception:
         # OPF creation failures should not block audio output
         pass
@@ -297,12 +305,35 @@ def _ensure_folder_opf(folder: Path, meta: dict) -> None:
     if opf_path.exists():
         return
 
-    # Prefer explicit series in meta, fallback to prior 'album' usage, then folder name
+    # Metadata aligned with ID3 tag logic
+    # Title should mirror ID3 title (subject in our pipeline)
+    title = (meta.get("title") or meta.get("subject") or meta.get("album") or folder.name or "").strip()
+    # Series captured via TXXX:series in ID3; include as calibre:series
     series = (meta.get("series") or meta.get("album") or folder.name or "").strip()
+    # Author/creator
     artist = (meta.get("from") or "").strip()
+    # Narrator maps from ID3 composer
+    narrator = (meta.get("composer") or "").strip()
+    # Date and language
     date_str = (meta.get("date") or "").strip()
-    # OPF 2.0 requires a language; default to English if unknown
     language = (meta.get("language") or "en").strip()
+    # Genre/subject and publisher
+    genre = (meta.get("genre") or "erotica").strip()
+    publisher = (meta.get("publisher") or "nifty.org").strip()
+    # Track index for series index
+    series_index = str(meta.get("track")).strip() if meta.get("track") is not None else ""
+    # Source URL (also included in ID3 description)
+    url = (meta.get("url") or "").strip()
+
+    # Description to mirror ID3 comment/description
+    desc_lines = [
+        "This file was converted from a story posted to nifty.org, the original author retains all copyright, and this file may ONLY be used for personal use and not distributed in any way.",
+    ]
+    if url:
+        desc_lines.append("")
+        desc_lines.append("")
+        desc_lines.append(f"Original URL:  {url}")
+    description = "\n".join(desc_lines)
 
     book_id = f"urn:uuid:{uuid.uuid4()}"
 
@@ -311,11 +342,17 @@ def _ensure_folder_opf(folder: Path, meta: dict) -> None:
         "<package version=\"2.0\" unique-identifier=\"BookId\" xmlns=\"http://www.idpf.org/2007/opf\">\n"
         "  <metadata xmlns:dc=\"http://purl.org/dc/elements/1.1/\" xmlns:opf=\"http://www.idpf.org/2007/opf\">\n"
         f"    <dc:identifier id=\"BookId\">{_xml(book_id)}</dc:identifier>\n"
-        f"    <dc:title>{_xml(series)}</dc:title>\n"
+        f"    <dc:title>{_xml(title)}</dc:title>\n"
         + (f"    <dc:creator opf:role=\"aut\">{_xml(artist)}</dc:creator>\n" if artist else "")
+        + (f"    <dc:contributor opf:role=\"nrt\">{_xml(narrator)}</dc:contributor>\n" if narrator else "")
+        + (f"    <dc:publisher>{_xml(publisher)}</dc:publisher>\n" if publisher else "")
         + (f"    <dc:date>{_xml(date_str)}</dc:date>\n" if date_str else "")
         + f"    <dc:language>{_xml(language)}</dc:language>\n"
-        + f"    <meta name=\"calibre:series\" content=\"{_xml(series)}\"/>\n"
+        + (f"    <dc:subject>{_xml(genre)}</dc:subject>\n" if genre else "")
+        + (f"    <dc:description>{_xml(description)}</dc:description>\n" if description else "")
+        + (f"    <dc:source>{_xml(url)}</dc:source>\n" if url else "")
+        + (f"    <meta name=\"calibre:series\" content=\"{_xml(series)}\"/>\n" if series else "")
+        + (f"    <meta name=\"calibre:series_index\" content=\"{_xml(series_index)}\"/>\n" if series and series_index else "")
         + "  </metadata>\n"
         + "  <manifest/>\n"
         + "  <spine toc=\"ncx\"/>\n"
