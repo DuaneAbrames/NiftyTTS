@@ -117,10 +117,24 @@ def write_err(base: str, msg: str, exc: BaseException | None = None, text_sample
     print(f"[x] {base}: {msg}. Details -> {err.name}")
 
 
+def out_path(base: str) -> Path:
+    meta = IN_DIR / f"{base}.json"
+    out_mp3 = OUT_DIR / f"{base}.mp3"
+    if meta.exists():
+        try:
+            data = json.loads(meta.read_text(encoding="utf-8"))
+            rel = data.get("output_rel")
+            if rel:
+                out_mp3 = OUT_DIR / rel
+        except Exception:
+            pass
+    out_mp3.parent.mkdir(parents=True, exist_ok=True)
+    return out_mp3
+
 def process_job(txt_path: Path):
     base = txt_path.stem
-    out_mp3 = OUT_DIR / f"{base}.mp3"
-    err_file = OUT_DIR / f"{base}.err.txt"
+    out_mp3 = out_path(base)
+    err_file = out_mp3.with_suffix(".err.txt")
     if out_mp3.exists() and out_mp3.stat().st_size > 0 or (err_file.exists() and err_file.stat().st_size > 0):
         return
 
@@ -138,6 +152,16 @@ def process_job(txt_path: Path):
         print(f"[+] Synthesizing: {txt_path.name}")
 
         meta, body = parse_job_file(txt_path, base)
+        # Enrich with album/track from incoming job JSON if available
+        try:
+            j = IN_DIR / f"{base}.json"
+            if j.exists():
+                data = json.loads(j.read_text(encoding="utf-8"))
+                for k in ("album", "track"):
+                    if k in data and k not in meta:
+                        meta[k] = data[k]
+        except Exception:
+            pass
         synth_to_wav(body, wav_tmp)
 
         if not ffmpeg_exists():
@@ -191,8 +215,8 @@ def main():
     while True:
         for txt in IN_DIR.glob("*.txt"):
             base = txt.stem
-            out_mp3 = OUT_DIR / f"{base}.mp3"
-            err_file = OUT_DIR / f"{base}.err.txt"
+            out_mp3 = out_path(base)
+            err_file = out_mp3.with_suffix(".err.txt")
             if base in seen or (out_mp3.exists() and out_mp3.stat().st_size > 0) or (err_file.exists() and err_file.stat().st_size > 0):
                 continue
             seen.add(base)

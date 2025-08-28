@@ -58,9 +58,18 @@ def _ensure_id3(mp3_path: Path) -> None:
 
 
 def finalize_output(mp3_path: Path, meta: dict) -> None:
-    """Write JSON metadata, apply ID3 tags, create folder OPF, and touch file mtime."""
+    """Apply ID3 tags, create folder OPF, and touch file mtime.
+
+    We no longer emit a sidecar .json in the output directory to avoid
+    confusing downstream apps. If one exists from a previous run, remove it.
+    """
     json_path = mp3_path.with_suffix(".json")
-    json_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        if json_path.exists():
+            json_path.unlink()
+    except Exception:
+        # If deletion fails, continue without blocking audio output
+        pass
 
     _ensure_id3(mp3_path)
     tags = EasyID3(mp3_path)

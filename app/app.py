@@ -21,6 +21,7 @@ IN_DIR = JOBS_DIR / "incoming"
 OUT_DIR = JOBS_DIR / "outgoing"
 TIMEOUT_SECONDS = 120           # how long to wait for the .mp3 after submit
 POLL_INTERVAL = 2.0
+RECENT_SECONDS = 2 * 60 * 60    # window for recent jobs on status page
 MAX_DOWNLOAD_BYTES = 5_000_000  # cap the fetched page size (bytes)
 MAX_TEXTAREA_BYTES = 2_000_000  # server-side guard on large pasted text
 
@@ -79,27 +80,92 @@ def _meta_for(base_name: str) -> dict:
         return {}
 
 
+def _slug_to_title(slug: str) -> str:
+    return slug.replace("-", " ").strip().title()
+
+def _sanitize_segment(name: str) -> str:
+    """Filesystem-safe human-readable segment (for folders).
+
+    Replaces Windows-invalid chars, collapses whitespace, trims trailing dots.
+    """
+    name = str(name or "").strip()
+    name = re.sub(r"[\\/<>:\\"|?*]+", "_", name)
+    name = re.sub(r"\s+", " ", name).strip(" .")
+    return name or "Untitled"
+
 def output_relpath_from_url(url: str) -> Path:
+    """Legacy helper: single-level <Folder>/<Title[ XXX]>.mp3 derived from URL.
+
+    Retained for compatibility. New jobs use output_relpath_for() which includes
+    Author/Series/Item folder structure.
+    """
     parsed = urlparse(url)
     parts = [p for p in parsed.path.strip("/").split("/") if p]
     file_part = parts[-1] if parts else parsed.netloc
     folder_slug = parts[-2] if len(parts) >= 2 else file_part
     if "." in file_part:
         file_part = file_part.rsplit(".", 1)[0]
+    m = re.match(r"^(.*?)(?:-(\d+))?$", file_part)
+    base_slug = m.group(1)
+    digits = m.group(2)
+    title = _slug_to_title(base_slug)
+    folder = _slug_to_title(folder_slug)
+    fname = f"{title} {int(digits):03d}.mp3" if digits else f"{title}.mp3"
+    return Path(folder) / fname
 
-    def slug_to_title(slug: str) -> str:
-        return slug.replace("-", " ").strip().title()
+def output_relpath_for(url: str, headers: dict[str, str] | None) -> tuple[Path, dict]:
+    """Compute Author/Series/NNN - Title/Title.mp3 and return (relpath, extra_meta).
+
+    - Author comes from headers["from"] (name part), else "Unknown".
+    - Series derives from the URL folder slug (if any).
+    - Track number derives from trailing -NNN in the URL's last segment (if any).
+    - Title prefers headers["subject"], else title from URL slug.
+    - MP3 filename is Title.mp3 inside the item folder.
+    """
+    headers = headers or {}
+    parsed = urlparse(url)
+    parts = [p for p in parsed.path.strip("/").split("/") if p]
+    file_part = parts[-1] if parts else parsed.netloc
+    folder_slug = parts[-2] if len(parts) >= 2 else ""
+    if "." in file_part:
+        file_part = file_part.rsplit(".", 1)[0]
 
     m = re.match(r"^(.*?)(?:-(\d+))?$", file_part)
     base_slug = m.group(1)
     digits = m.group(2)
-    title = slug_to_title(base_slug)
-    folder = slug_to_title(folder_slug)
-    if digits:
-        fname = f"{title} {int(digits):03d}.mp3"
-    else:
-        fname = f"{title}.mp3"
-    return Path(folder) / fname
+
+    # Derive fields
+    series_title = _slug_to_title(folder_slug) if folder_slug else ""
+    url_title = _slug_to_title(base_slug)
+
+    raw_from = headers.get("from", "").strip()
+    author_name = parseaddr(raw_from)[0].strip() if raw_from else ""
+    author_dir = _sanitize_segment(author_name or "Unknown")
+
+    raw_subject = headers.get("subject", "").strip()
+    title = raw_subject or url_title
+    title_clean = _sanitize_segment(title)
+
+    track_num = int(digits) if digits else None
+    item_folder = f"{track_num:03d} - {title_clean}" if track_num else title_clean
+
+    series_dir = _sanitize_segment(series_title) if series_title else None
+
+    # MP3 filename (do not repeat track since folder has it)
+    mp3_name = f"{title_clean}.mp3"
+
+    segments = [author_dir]
+    if series_dir:
+        segments.append(series_dir)
+    segments.append(item_folder)
+    rel = Path(*segments) / mp3_name
+
+    extra_meta = {}
+    if series_title:
+        extra_meta["album"] = series_title
+    if track_num is not None:
+        extra_meta["track"] = track_num
+    return rel, extra_meta
 
 
 def mp3_path_for(base_name: str) -> Path:
@@ -231,7 +297,6 @@ def build_job(url: str, text: str, headers: dict[str, str] | None = None) -> str
         "url": url,
         "created_ts": int(time.time()),
         "text_file": text_path.name,
-        "output_rel": output_relpath_from_url(url).as_posix(),
     }
 
     if headers:
@@ -255,6 +320,12 @@ def build_job(url: str, text: str, headers: dict[str, str] | None = None) -> str
                 meta["date"] = date_raw
         if hdr_lines:
             body = "\n".join(hdr_lines) + "\n\n" + body
+
+    # Compute output relative path using available headers
+    rel, extra = output_relpath_for(url, headers or {})
+    meta["output_rel"] = rel.as_posix()
+    # Enrich meta for downstream tagging
+    meta.update(extra)
 
     text_path.write_text(body, encoding="utf-8")
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -487,45 +558,188 @@ async def submit(
 ):
     headers = {"from": from_hdr, "subject": subject_hdr, "date": date_hdr}
     base_name = build_job(u, text, headers)
-    out_mp3 = mp3_path_for(base_name)
-    err_path = err_path_for(base_name)
+    # Immediately redirect to the status page (list view) and highlight this job
+    return RedirectResponse(url=f"/status?focus={base_name}", status_code=303)
 
-    start = time.time()
-    while time.time() - start < TIMEOUT_SECONDS:
-        # NEW: show error as soon as it appears
+def _fmt_ts(ts: float | int | None) -> str:
+    try:
+        if ts is None:
+            return ""
+        return datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return ""
+
+def _human_bytes(n: int) -> str:
+    try:
+        n = int(n)
+    except Exception:
+        return "0 B"
+    for unit in ("B", "KB", "MB", "GB"):
+        if n < 1024.0:
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024.0
+    return f"{n:.1f} TB"
+
+def _read_text_headers(text_path: Path) -> dict[str, str]:
+    try:
+        raw = text_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return {}
+    body, headers = strip_leading_email_headers(raw)
+    return headers or {}
+
+def _recent_jobs(now: float, focus: str | None = None) -> tuple[list[str], str]:
+    rows: list[str] = []
+    cutoff = now - RECENT_SECONDS
+    # Gather candidate bases from incoming JSON meta files
+    items: list[tuple[str, dict]] = []
+    for meta_path in sorted(IN_DIR.glob("*.json")):
+        base = meta_path.stem
+        try:
+            data = json.loads(meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        created_ts = data.get("created_ts")
+        # Fallback: use file mtime if missing
+        if not created_ts:
+            try:
+                created_ts = int(meta_path.stat().st_mtime)
+            except Exception:
+                created_ts = int(now)
+        if created_ts < cutoff:
+            continue
+        items.append((base, data))
+
+    # Sort newest first by created_ts
+    def _sort_key(pair: tuple[str, dict]):
+        ts = pair[1].get("created_ts") or 0
+        return ts
+    items.sort(key=_sort_key, reverse=True)
+
+    for base, data in items:
+        anchor = f" id=\"job-{html_escape(base)}\"" if focus == base else ""
+        out_path = mp3_path_for(base)
+        err_path = err_path_for(base)
+        tmp_path = out_path.with_name(out_path.name + ".tmp")
+
+        # Determine status
+        status_txt = "queued"
+        extra = ""
+        completed_ts: float | None = None
         if err_path.exists() and err_path.stat().st_size > 0:
-            return render(job_error_block(base_name, u, read_error_text(err_path)))
+            status_txt = "error"
+            extra = f"<a href=\"/error/{html_escape(base)}\">error log</a>"
+        elif out_path.exists() and out_path.stat().st_size > 0:
+            status_txt = "ready"
+            completed_ts = out_path.stat().st_mtime
+            extra = (
+                f"<a class=\"btn\" href=\"/download/{html_escape(base)}\">Download</a>"
+                f"<audio controls src=\"/download/{html_escape(base)}\" preload=\"metadata\"></audio>"
+            )
+        elif tmp_path.exists():
+            status_txt = "running"
+            try:
+                sz = tmp_path.stat().st_size
+                extra = f"tmp: {_human_bytes(sz)}"
+            except Exception:
+                extra = "tmp: (size unavailable)"
 
-        if out_mp3.exists() and out_mp3.stat().st_size > 0:
-            return render(job_ready_block(base_name, u))
+        # Display fields
+        created_ts = data.get("created_ts")
+        url = data.get("url", "")
+        # Series from output_rel grandparent (Author/Series/Item/Title.mp3)
+        output_rel = data.get("output_rel", "")
+        if output_rel:
+            p = Path(output_rel)
+            series = html_escape(p.parent.parent.name) if p.parent != p and p.parent.parent != p.parent else ""
+        else:
+            series = ""
 
-        await _sleep(POLL_INTERVAL)
+        # If started (running/ready/error), attempt to show author/title/series
+        started = status_txt != "queued"
+        title_block = ""
+        if started:
+            # Prefer finalized meta if available
+            meta_json = out_path.with_suffix(".json")
+            author = ""
+            title = ""
+            album = series
+            if meta_json.exists():
+                try:
+                    fin = json.loads(meta_json.read_text(encoding="utf-8"))
+                    author = fin.get("from", "") or ""
+                    title = fin.get("subject", "") or ""
+                    album = fin.get("album", album) or album
+                except Exception:
+                    pass
+            if not author and not title:
+                # Fallback to parsing headers from incoming text
+                text_path = IN_DIR / f"{base}.txt"
+                headers = _read_text_headers(text_path)
+                author = headers.get("from", "")
+                title = headers.get("subject", "")
+            parts = []
+            if author:
+                parts.append(html_escape(author))
+            if title:
+                parts.append(html_escape(title))
+            if album:
+                parts.append(f"[{html_escape(album)}]")
+            title_block = " 00 ".join(p for p in parts if p)
+            if not title_block:
+                title_block = html_escape(Path(output_rel).name or base)
+        else:
+            # queued: last directory and filename from the URL
+            try:
+                parsed = urlparse(url)
+                segs = [s for s in parsed.path.split("/") if s]
+                last_dir = segs[-2] if len(segs) >= 2 else (segs[0] if segs else parsed.netloc)
+                fname = segs[-1] if segs else parsed.netloc
+                title_block = f"{html_escape(last_dir)}/{html_escape(fname)}"
+            except Exception:
+                title_block = html_escape(base)
 
-    # timed out
-    return render(job_wait_block(base_name))
+        created_str = _fmt_ts(created_ts)
+        completed_str = _fmt_ts(completed_ts) if completed_ts else ""
+        when = f"<span class=\"muted\">submitted {created_str}</span>"
+        if completed_str:
+            when += f" 0 0 <span class=\"muted\">completed {completed_str}</span>"
+
+        rows.append(
+            f"<div class=\"card\"{anchor}>"
+            f"  <div class=\"row\"><b>{title_block}</b></div>"
+            f"  <div class=\"row\">Status: <span class=\"mono\">{html_escape(status_txt)}</span> {extra}</div>"
+            f"  <div class=\"row\">{when}</div>"
+            f"</div>"
+        )
+
+    if not rows:
+        return [], "<p class=\"muted\">No recent jobs in the last 2 hours.</p>"
+    return rows, ""
+
+@app.get("/status", response_class=HTMLResponse)
+def status_list(request: Request, focus: str | None = None):
+    now = time.time()
+    rows, empty_msg = _recent_jobs(now, focus)
+    if empty_msg:
+        body = (
+            "<h1>Recent Jobs</h1>" +
+            empty_msg +
+            "<p><a class=\"btn\" href=\"/\">Convert another</a></p>"
+        )
+        return render(body)
+
+    body = ["<h1>Recent Jobs</h1>"]
+    if focus:
+        body.append(f"<p class=\"muted\">Jumped to job <code>{html_escape(focus)}</code></p>")
+    body.extend(rows)
+    body.append("<p><a class=\"btn\" href=\"/\">Convert another</a></p>")
+    return render("\n".join(body))
 
 @app.get("/status/{base_name}", response_class=HTMLResponse)
-def status(base_name: str, request: Request):
-    out_mp3 = mp3_path_for(base_name)
-    err_path = err_path_for(base_name)
-
-    # Try to pull original URL
-    url = None
-    for meta in IN_DIR.glob(f"{base_name}.json"):
-        try:
-            url = json.loads(meta.read_text(encoding="utf-8")).get("url")
-        except Exception:
-            pass
-        break
-
-    if err_path.exists() and err_path.stat().st_size > 0:
-        body = job_error_block(base_name, url, read_error_text(err_path))
-    elif out_mp3.exists() and out_mp3.stat().st_size > 0:
-        body = job_ready_block(base_name, url or "(unknown)")
-    else:
-        body = job_wait_block(base_name)
-
-    return render(body)
+def status_compat(base_name: str):
+    # Backward-compatible: redirect to list view highlighting this job
+    return RedirectResponse(url=f"/status?focus={base_name}", status_code=307)
     
 @app.get("/error/{base_name}")
 def download_error(base_name: str):

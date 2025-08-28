@@ -122,8 +122,8 @@ def out_path(base: str) -> Path:
 def process_job(txt: Path):
     base = txt.stem
 
-    out_mp3 = OUT_DIR / f"{base}.mp3"
-    err_file = OUT_DIR / f"{base}.err.txt"
+    out_mp3 = out_path(base)
+    err_file = out_mp3.with_suffix(".err.txt")
     if out_mp3.exists() and out_mp3.stat().st_size > 0 or (err_file.exists() and err_file.stat().st_size > 0):
         return
 
@@ -145,6 +145,16 @@ def process_job(txt: Path):
         if not Path(PIPER_MODEL).is_file():
             raise FileNotFoundError(f"Piper model not found: {PIPER_MODEL}")
         meta, body = parse_job_file(txt, base)
+        # Enrich with album/track from incoming job JSON if available
+        try:
+            j = IN_DIR / f"{base}.json"
+            if j.exists():
+                data = json.loads(j.read_text(encoding="utf-8"))
+                for k in ("album", "track"):
+                    if k in data and k not in meta:
+                        meta[k] = data[k]
+        except Exception:
+            pass
         piper_to_wav(body, tmp_wav)
 
         wav_to_mp3(tmp_wav, tmp_mp3)
@@ -179,8 +189,8 @@ def main():
     while True:
         for txt in IN_DIR.glob("*.txt"):
             base = txt.stem
-            out_mp3 = OUT_DIR / f"{base}.mp3"
-            err_file = OUT_DIR / f"{base}.err.txt"
+            out_mp3 = out_path(base)
+            err_file = out_mp3.with_suffix(".err.txt")
             if base in seen or (out_mp3.exists() and out_mp3.stat().st_size > 0) or (err_file.exists() and err_file.stat().st_size > 0):
 
                 continue
