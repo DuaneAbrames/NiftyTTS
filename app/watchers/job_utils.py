@@ -47,6 +47,12 @@ def _ensure_id3(mp3_path: Path) -> None:
         ID3(mp3_path)
     except ID3NoHeaderError:
         ID3().save(mp3_path)
+    except Exception:
+        try:
+            ID3().delete(mp3_path)
+        except Exception:
+            pass
+        ID3().save(mp3_path)
 
 
 def finalize_output(mp3_path: Path, meta: dict) -> None:
