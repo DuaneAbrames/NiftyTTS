@@ -578,16 +578,16 @@ def _fmt_ts(ts: float | int | None) -> str:
     except Exception:
         return ""
 
-def _human_bytes(n: int) -> str:
+def _human_bytes(n: float | int) -> str:
     try:
-        n = int(n)
+        val = float(n)
     except Exception:
         return "0 B"
     for unit in ("B", "KB", "MB", "GB"):
-        if n < 1024.0:
-            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
-        n /= 1024.0
-    return f"{n:.1f} TB"
+        if val < 1024.0:
+            return f"{val:.0f} {unit}" if unit == "B" else f"{val:.1f} {unit}"
+        val /= 1024.0
+    return f"{val:.1f} TB"
 
 def _read_text_headers(text_path: Path) -> dict[str, str]:
     try:

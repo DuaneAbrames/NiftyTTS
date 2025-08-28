@@ -18,11 +18,20 @@ import argparse
 import os
 from pathlib import Path
 
-from watchers.job_utils import download_cover_image
+# Ensure project root on sys.path so `app.*` imports work when running as a script
+try:
+    from app.watchers.job_utils import download_cover_image
+except ModuleNotFoundError:
+    import sys
+    from pathlib import Path as _P
+    _ROOT = _P(__file__).resolve().parents[2]
+    if str(_ROOT) not in sys.path:
+        sys.path.insert(0, str(_ROOT))
+    from app.watchers.job_utils import download_cover_image
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = ROOT / "jobs" / "outgoing"
+OUT_DIR = ROOT 
 
 
 def is_leaf_folder(folder: Path) -> bool:
@@ -89,4 +98,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

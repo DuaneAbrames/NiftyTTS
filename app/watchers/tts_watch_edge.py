@@ -72,7 +72,8 @@ async def synth_to_mp3(txt: str, out_mp3: Path) -> int:
 
     # Prefer passing format to .save(); fall back if not supported
     try:
-        await asyncio.wait_for(communicate.save(str(tmp_mp3), format=OUTPUT_FORMAT), timeout=SYNTH_TIMEOUT)
+        # Use dynamic kwargs to avoid static type complaints in some edge_tts versions
+        await asyncio.wait_for(communicate.save(str(tmp_mp3), **{"format": OUTPUT_FORMAT}), timeout=SYNTH_TIMEOUT)
     except TypeError:
         await asyncio.wait_for(communicate.save(str(tmp_mp3)), timeout=SYNTH_TIMEOUT)
 
