@@ -316,8 +316,8 @@ def _ensure_folder_opf(folder: Path, meta: dict) -> None:
     # Metadata aligned with ID3 tag logic
     # Title should mirror ID3 title (subject in our pipeline)
     title = (meta.get("title") or meta.get("subject") or meta.get("album") or folder.name or "").strip()
-    # Series captured via TXXX:series in ID3; include as calibre:series
-    series = (meta.get("series") or meta.get("album") or folder.name or "").strip()
+    # Series: only include explicit series (no fallback to album/folder for non-series)
+    series = (meta.get("series") or "").strip()
     # Author/creator
     artist = (meta.get("from") or "").strip()
     # Narrator maps from ID3 composer

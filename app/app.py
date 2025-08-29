@@ -175,8 +175,9 @@ def output_relpath_for(url: str, headers: dict[str, str] | None) -> tuple[Path, 
     is_nifty_non_series = is_nifty and pre_file_depth == 3
 
     if is_nifty_non_series:
-        # Place directly in the author folder: Author/Title.mp3
-        rel = Path(author_dir) / mp3_name
+        # Non-series story: create an item folder under the author.
+        # Desired: Author/Title/Title.mp3 (no series directory)
+        rel = Path(author_dir) / item_folder / mp3_name
         extra_meta = {}
         # Do not set album/series for non-series works
         # Track is also omitted (rare/non-sensical in this case)
@@ -680,7 +681,9 @@ def _recent_jobs(now: float, focus: str | None = None) -> tuple[list[str], str]:
         output_rel = data.get("output_rel", "")
         if output_rel:
             p = Path(output_rel)
-            series = html_escape(p.parent.parent.name) if p.parent != p and p.parent.parent != p.parent else ""
+            # Only treat as series when path depth is >= 4: Author/Series/Item/Title.mp3
+            parts = p.parts
+            series = html_escape(parts[-3]) if len(parts) >= 4 else ""
         else:
             series = ""
 
