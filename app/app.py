@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from fastapi import FastAPI, Query, HTTPException, Form, Request
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from string import Template
+from app.backends import all_backends, available_backends
 
 # --- Config ---
 BACKEND = os.environ.get("BACKEND", "edge")
@@ -28,7 +29,7 @@ MAX_TEXTAREA_BYTES = 2_000_000  # server-side guard on large pasted text
 IN_DIR.mkdir(parents=True, exist_ok=True)
 OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="NiftyTTS – Simple 2-Step")
+app = FastAPI(title="NiftyTTS - Simple 2-Step")
 
 SAFE_SCHEMES = {"http", "https"}
 
@@ -42,7 +43,7 @@ HTML_TEMPLATE = Template(r"""<!doctype html>
   body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem; max-width: 980px; }
   form { display: grid; gap: .75rem; }
   input[type=url], textarea { width: 100%; padding: .6rem .8rem; border: 1px solid #ccc; border-radius: .5rem; }
-  textarea { min-height: 420px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  textarea { min-height: 360px; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
   button { padding: .7rem 1rem; border: 0; border-radius: .5rem; background: #111; color: #fff; cursor: pointer; width: fit-content; }
   .card { border: 1px solid #e5e5e5; border-radius: .75rem; padding: 1rem; margin-top: 1rem; }
   .muted { color: #666; }
@@ -56,6 +57,8 @@ HTML_TEMPLATE = Template(r"""<!doctype html>
   /* backend badge */
   .hdr { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin-bottom: .75rem; }
   .badge { font-size: .85rem; padding: .2rem .5rem; border: 1px solid currentColor; border-radius: .5rem; white-space: nowrap; }
+  .list { margin: .5rem 0; padding-left: 1.1rem; }
+  .kv { display:grid; grid-template-columns: 140px 1fr; gap:.25rem .5rem; }
 </style>
 
 <div class="hdr">
@@ -276,7 +279,7 @@ def extract_text_from_response(resp: httpx.Response) -> tuple[str, str]:
 
     raise HTTPException(415, "Unsupported content-type. Please supply a text/plain or HTML page.")
 
-def build_job(url: str, text: str, headers: dict[str, str] | None = None) -> str:
+def build_job(url: str, text: str, headers: dict[str, str] | None = None, *, backend: str | None = None, voice: str | None = None) -> str:
     """
     Create a job basename from the URL and current timestamp. Optionally embed
     email-style headers (From/Subject/Date) into the job text and JSON meta.
@@ -356,6 +359,11 @@ def build_job(url: str, text: str, headers: dict[str, str] | None = None) -> str
     meta["output_rel"] = rel.as_posix()
     # Enrich meta for downstream tagging
     meta.update(extra)
+    # Persist chosen backend/voice if provided
+    if backend:
+        meta["backend"] = backend
+    if voice:
+        meta["voice"] = voice
 
     text_path.write_text(body, encoding="utf-8")
     meta_path.write_text(json.dumps(meta, indent=2), encoding="utf-8")
@@ -481,6 +489,21 @@ def form_step2(u: str, text: str, meta: dict | None = None) -> str:
         if val:
             hidden.append(f'<input type="hidden" name="{key}" value="{html_escape(val)}">')
     hidden_inputs = "\n  ".join(hidden)
+    # Backend/voice options
+    be_list = available_backends()
+    be_options = []
+    be_default = os.environ.get("NIFTYTTS_BACKEND", os.environ.get("BACKEND", "edge"))
+    for be in be_list:
+        sel = " selected" if be.backend_id == be_default else ""
+        be_options.append(f'<option value="{be.backend_id}"{sel}>{html_escape(be.display_name)}</option>')
+    # Gather voice lists for each backend
+    be_voices = {}
+    for be in be_list:
+        try:
+            vs = be.list_voices()
+        except Exception:
+            vs = []
+        be_voices[be.backend_id] = [v.get("name", "") for v in vs if v.get("name")]
     # textarea contains sanitized text for HTML pages or raw text for text/plain
     return f"""
 <h1>Review &amp; Edit Text</h1>
@@ -488,6 +511,18 @@ def form_step2(u: str, text: str, meta: dict | None = None) -> str:
 <form method="post" action="/submit">
   <input type="hidden" name="u" value="{safe_u}">
   {hidden_inputs}
+  <div class="row">
+    <label>
+      <div><b>Backend</b></div>
+      <select name="backend" id="backend">
+        {''.join(be_options)}
+      </select>
+    </label>
+    <label>
+      <div><b>Voice</b> <span class="muted">(optional)</span></div>
+      <select name="voice" id="voice"></select>
+    </label>
+  </div>
   <label>
     <div><b>Step 2:</b> Edit the text below</div>
     <textarea id="text" name="text" required>{html_escape(text)}</textarea>
@@ -505,6 +540,26 @@ def form_step2(u: str, text: str, meta: dict | None = None) -> str:
   const ta = document.getElementById('text');
   document.getElementById('scroll-top').addEventListener('click', () => ta.scrollTop = 0);
   document.getElementById('scroll-bottom').addEventListener('click', () => ta.scrollTop = ta.scrollHeight);
+  const voicesByBackend = {json.dumps(be_voices)};
+  const backendSel = document.getElementById('backend');
+  const voiceSel = document.getElementById('voice');
+  function populateVoices() {{
+    const bid = backendSel.value;
+    const list = voicesByBackend[bid] || [];
+    voiceSel.innerHTML = '';
+    const optNone = document.createElement('option');
+    optNone.value = '';
+    optNone.textContent = '(backend default)';
+    voiceSel.appendChild(optNone);
+    for (const name of list) {{
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      voiceSel.appendChild(opt);
+    }}
+  }}
+  backendSel.addEventListener('change', populateVoices);
+  populateVoices();
 </script>
 """
 
@@ -585,9 +640,11 @@ async def submit(
     from_hdr: str = Form("", alias="from"),
     subject_hdr: str = Form("", alias="subject"),
     date_hdr: str = Form("", alias="date"),
+    backend: str = Form(""),
+    voice: str = Form(""),
 ):
     headers = {"from": from_hdr, "subject": subject_hdr, "date": date_hdr}
-    base_name = build_job(u, text, headers)
+    base_name = build_job(u, text, headers, backend=backend or None, voice=voice or None)
     # Immediately redirect to the status page (list view) and highlight this job
     return RedirectResponse(url=f"/status?focus={base_name}", status_code=303)
 
@@ -786,3 +843,39 @@ def download(base_name: str):
     if not out_mp3.exists() or out_mp3.stat().st_size == 0:
         raise HTTPException(404, "MP3 not found yet.")
     return FileResponse(path=out_mp3, media_type="audio/mpeg", filename=out_mp3.name)
+
+@app.get("/backends", response_class=HTMLResponse)
+def list_backends():
+    """Enumerate installed backends and their available voices."""
+    items: list[str] = []
+    for be in all_backends():
+        avail = be.available()
+        status = "available" if avail else "unavailable"
+        items.append(f"<h2 style=\"margin:.5rem 0 0.25rem\">{be.display_name} <span class=\"muted\">[{be.backend_id}] - {status}</span></h2>")
+        if avail:
+            try:
+                voices = be.list_voices()
+            except Exception as e:
+                voices = []
+            if not voices:
+                items.append("<p class=\"muted\">(no voices found or listing not supported)</p>")
+            else:
+                # Render as a compact list
+                items.append("<ul class=\"list\">")
+                for v in voices[:200]:
+                    name = html_escape(str(v.get("name", "")))
+                    extras: list[str] = []
+                    for key in ("locale", "gender", "style", "friendly", "lang"):
+                        val = v.get(key)
+                        if val:
+                            extras.append(f"{key}: {html_escape(str(val))}")
+                    suffix = f" <span class=\"muted\">(" + ", ".join(extras) + ")</span>" if extras else ""
+                    items.append(f"<li><code>{name}</code>{suffix}</li>")
+                items.append("</ul>")
+        else:
+            items.append("<p class=\"muted\">Install or configure this backend to enable it.</p>")
+
+    body = ["<h1>Installed Backends & Voices</h1>"]
+    body.extend(items)
+    body.append("<p><a class=\"btn\" href=\"/\">Convert another</a></p>")
+    return render("\n".join(body))

@@ -5,34 +5,14 @@ set -euo pipefail
 OUT_UID="${NIFTYTTS_UID:-99}"
 OUT_GID="${NIFTYTTS_GID:-100}"
 
-# Which watcher to run? default = edge
-WATCHER="${BACKEND:-edge}"
-
-echo "[entrypoint] Starting NiftyTTS with BACKEND='${WATCHER}'"
+echo "[entrypoint] Starting NiftyTTS"
 
 # Start web app
-python -m uvicorn app:app --host 0.0.0.0 --port 7230 &
+python -m uvicorn app.app:app --host 0.0.0.0 --port 7230 &
 WEB_PID=$!
 
-# Map BACKEND -> watcher script
-case "$WATCHER" in
-  edge|EDGE)
-    WATCH_CMD=(python watchers/tts_watch_edge.py)
-    ;;
-  piper|PIPER)
-    WATCH_CMD=(python watchers/tts_watch_piper.py)
-    ;;
-  local|sapi|LOCAL)
-    WATCH_CMD=(python watchers/tts_watch_pyttsx.py)
-    ;;
-  *)
-    echo "[entrypoint] Unknown BACKEND '${WATCHER}', falling back to 'edge'"
-    WATCH_CMD=(python watchers/tts_watch_edge.py)
-    ;;
-esac
-
-# Start watcher
-"${WATCH_CMD[@]}" &
+# Start dispatcher watcher (per-job backend selection supported)
+python -m app.watchers.dispatcher_watch &
 WATCH_PID=$!
 
 # Wait on either to exit; then stop both
