@@ -490,7 +490,8 @@ def form_step2(u: str, text: str, meta: dict | None = None) -> str:
             hidden.append(f'<input type="hidden" name="{key}" value="{html_escape(val)}">')
     hidden_inputs = "\n  ".join(hidden)
     # Backend/voice options
-    be_list = available_backends()
+    # Show all discovered backends to allow selection even if some are not currently available
+    be_list = all_backends()
     be_options = []
     be_default = os.environ.get("NIFTYTTS_BACKEND", os.environ.get("BACKEND", "edge"))
     for be in be_list:

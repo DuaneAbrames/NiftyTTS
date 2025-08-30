@@ -5,8 +5,8 @@
 NiftyTTS is designed for converting stories from nifty.org into MP3 audio files.
 The project provides a small [FastAPI](https://fastapi.tiangolo.com/) web
 application that fetches a URL, extracts text, and posts conversion jobs
-into a `jobs` directory.  Background **watcher** processes pick up those
-jobs and run a text‑to‑speech engine to produce MP3 files.
+into a `jobs` directory. A single background dispatcher watches for jobs and
+invokes a pluggable TTS backend to produce MP3 files.
 
 The repository includes helper scripts and a Docker image so the service
 can run entirely locally or inside a container.
@@ -24,83 +24,89 @@ not serial)
 
 ## Architecture
 
-* `app/app.py` – web interface that accepts a URL or pasted text and
-  displays progress while the audio is generated.
-* `app/watchers/` – backend workers for different TTS engines.  Each
-  watcher monitors `jobs/incoming` and writes finished MP3s to
-  `jobs/outgoing`.
-* `entrypoint.sh` – convenience script that launches the web app and the
-  selected watcher.  It is used as the Docker container entrypoint.
+- `app/app.py`: Web UI and HTTP API. Accepts a URL or pasted text, lets you
+  choose a backend and voice, and shows progress while audio is generated.
+- `app/backends/`: Pluggable TTS backends implementing a small interface
+  (`base.py`). Current adapters: `edge.py`, `piper.py`, and `pyttsx3.py`.
+  Visit `/backends` to see installed backends and available voices.
+- `app/watchers/dispatcher_watch.py`: Single watcher that monitors
+  `jobs/incoming` and dispatches each job to the selected backend (per job or
+  default).
+- `entrypoint.sh`: Launches the web app and dispatcher together (used by
+  the Docker image).
 
 ## Running
 
-1. Install dependencies listed in `app/requirements.txt` and ensure
-   `ffmpeg` is available.
-2. Start the web app with `uvicorn`:
+Local (Python 3.12+, ffmpeg required):
 
-   ```bash
-   uvicorn app:app --port 7230
-   ```
+1. Install deps in `app/requirements.txt` and ensure `ffmpeg` is available.
+2. Start the web app and dispatcher in two terminals:
 
-3. In another terminal, run one of the watcher scripts from
-   `app/watchers/`.  The watcher converts jobs into MP3 files.
+   - Web app:
+     ```bash
+     uvicorn app.app:app --host 0.0.0.0 --port 7230
+     ```
+   - Dispatcher:
+     ```bash
+     python -m app.watchers.dispatcher_watch
+     ```
 
-The `entrypoint.sh` script automates these steps and is used by the
-provided Dockerfile.  Building the image and running it with the default
-settings uses the hosted Microsoft Edge TTS service:
+Docker:
 
 ```bash
 docker build -t niftytts .
-docker run -p 7230:7230 niftytts
+docker run -p 7230:7230 \
+  -e NIFTYTTS_BACKEND=edge \
+  -v $(pwd)/models:/models \
+  niftytts
 ```
+
+Open http://localhost:7230/ and paste a URL. On the second step you can pick a
+backend and a voice; leave voice blank to use the backend default. The job will
+appear on the status page and be written under `app/jobs/outgoing`.
 
 ## Configuration
 
-Most behaviour is configured through environment variables.
+Most behaviour is configured through environment variables. A backend can be
+chosen globally by env var, and overridden per job from the web UI. Voices can
+also be selected per job.
 
 ### Common
 
-* `BACKEND` – choose which watcher to run (`edge` is the default).  Valid
-  options are `edge`, `piper`, or `local`.
-* `NIFTYTTS_POLL_INTERVAL` – seconds between checks for new jobs.
-* `NIFTYTTS_SYNTH_TIMEOUT` – maximum seconds to wait for a synthesis
-  operation before giving up.
-* `NIFTYTTS_MIN_MP3_BYTES` – minimum size of a successful MP3 file.
+- `NIFTYTTS_BACKEND` (or `BACKEND`): default backend if a job does not specify
+  one. Options: `edge`, `piper`, `pyttsx3`. Default: `edge`.
+- `NIFTYTTS_POLL_INTERVAL`: seconds between checks for new jobs. Default 0.5.
+- `NIFTYTTS_SYNTH_TIMEOUT`: max seconds to wait per synthesis. Default 600.
+- `NIFTYTTS_MIN_MP3_BYTES`: minimum size of a successful MP3. Default 1024.
 
-### Edge backend
+### Edge backend (app/backends/edge.py)
 
-Variables recognised by `app/watchers/tts_watch_edge.py`:
+- `NIFTYTTS_EDGE_VOICE`: default voice (e.g., `en-US-AriaNeural`).
+- `NIFTYTTS_EDGE_RATE`: speaking rate (e.g., `+0%`, `-20%`).
+- `NIFTYTTS_EDGE_PITCH`: pitch (e.g., `+0Hz`, `-2Hz`).
+- `NIFTYTTS_EDGE_FORMAT`: output audio format (default
+  `audio-24khz-48kbitrate-mono-mp3`).
 
-* `NIFTYTTS_EDGE_VOICE` – voice to use (for example `en-US-AriaNeural`).
-* `NIFTYTTS_EDGE_RATE` – speaking rate such as `+0%` or `-20%`.
-* `NIFTYTTS_EDGE_PITCH` – pitch adjustment like `+0Hz` or `-2Hz`.
-* `NIFTYTTS_EDGE_FORMAT` – explicit output audio format
-  (`audio-24khz-48kbitrate-mono-mp3` by default).
+### Piper backend (app/backends/piper.py)
 
-### Piper backend
+- `NIFTYTTS_PIPER_EXE`: path to `piper` executable. Default `piper`.
+- `NIFTYTTS_PIPER_MODEL`: path to a `.onnx` model or a directory containing
+  models. Default `/models` (mount this into the container).
+- `NIFTYTTS_FFMPEG_PATH`: path to `ffmpeg`. Default `ffmpeg`.
+- `NIFTYTTS_PIPER_LENGTH`: speaking rate (e.g., `1.0`).
+- `NIFTYTTS_PIPER_NOISE`: noise scale (default `0.667`).
 
-Variables recognised by `app/watchers/tts_watch_piper.py`:
+Voice selection: enter either a full path to a `.onnx` model or the basename of
+the model present under `NIFTYTTS_PIPER_MODEL` directory (e.g., `en_US-amy-low`).
 
-* `NIFTYTTS_PIPER_EXE` – path to the `piper` executable.
-* `NIFTYTTS_PIPER_MODEL` – path to a voice model `.onnx` file or a
-  directory containing models.
-* `NIFTYTTS_FFMPEG_PATH` – path to the `ffmpeg` binary.
-* `NIFTYTTS_PIPER_LENGTH` – speaking rate (1.0 normal).
-* `NIFTYTTS_PIPER_NOISE` – noise scale control (0.667 default).
+### Local (pyttsx3) backend (app/backends/pyttsx3.py)
 
-### Local (pyttsx3) backend
+- `NIFTYTTS_VOICE_SUBSTR`: default voice name substring to match.
+- `NIFTYTTS_RATE_WPM`: words-per-minute (default 180).
+- `NIFTYTTS_VOLUME`: 0.0..1.0 (default 1.0).
+- `NIFTYTTS_FFMPEG_PATH`: path to `ffmpeg`.
 
-Variables recognised by `app/watchers/tts_watch_pyttsx.py`:
-
-* `NIFTYTTS_VOICE_SUBSTR` – case-insensitive substring used to choose a
-  voice.
-* `NIFTYTTS_RATE_WPM` – speaking rate in words per minute (default 180).
-* `NIFTYTTS_VOLUME` – output volume 0.0–1.0 (default 1.0).
-* `NIFTYTTS_FFMPEG_PATH` – path to the `ffmpeg` binary.
-* Setting `NIFTYTTS_LIST_VOICES=1` prints available voice names and
-  exits.
-
-### Job output
+### Job output & file layout
 
 Generated MP3 files and JSON metadata are written to
 `app/jobs/outgoing`.  Errors are reported in corresponding `.err.txt`
@@ -109,6 +115,15 @@ files.  Temporary job input lives in `app/jobs/incoming`.
 For text submissions containing RFC822-style headers, the app extracts the
 `From`, `Subject`, and `Date` values and records them in each job's JSON
 metadata and ID3 tags.
+
+Output paths are organized as:
+
+```
+Author/Series/NNN - Title/Title.mp3
+```
+
+Non-series stories from nifty.org are placed under `Author/Title/Title.mp3`.
+Series and track numbers are derived from the URL and headers when available.
 
 ## License
 

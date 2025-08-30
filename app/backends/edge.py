@@ -39,8 +39,14 @@ class EdgeBackend(TTSBackend):
         return self._edge_tts is not None
 
     def list_voices(self) -> List[Dict[str, Any]]:
+        # If the module is unavailable, return a curated static list so the UI can offer choices.
         if not self.available():
-            return []
+            return [
+                {"name": "en-US-AriaNeural", "locale": "en-US", "gender": "Female"},
+                {"name": "en-US-GuyNeural", "locale": "en-US", "gender": "Male"},
+                {"name": "en-GB-LibbyNeural", "locale": "en-GB", "gender": "Female"},
+                {"name": "en-GB-RyanNeural", "locale": "en-GB", "gender": "Male"},
+            ]
         edge_tts = self._edge_tts
         assert edge_tts is not None
 
@@ -65,14 +71,24 @@ class EdgeBackend(TTSBackend):
 
         # Run in a fresh loop (caller may be sync context)
         try:
-            return asyncio.run(_fetch())
+            voices = asyncio.run(_fetch())
         except RuntimeError:
             # Already inside loop: create a temporary loop
             loop = asyncio.new_event_loop()
             try:
-                return loop.run_until_complete(_fetch())
+                voices = loop.run_until_complete(_fetch())
             finally:
                 loop.close()
+
+        # Fallback to a small curated list if nothing returned (e.g., offline)
+        if not voices:
+            voices = [
+                {"name": "en-US-AriaNeural", "locale": "en-US", "gender": "Female"},
+                {"name": "en-US-GuyNeural", "locale": "en-US", "gender": "Male"},
+                {"name": "en-GB-LibbyNeural", "locale": "en-GB", "gender": "Female"},
+                {"name": "en-GB-RyanNeural", "locale": "en-GB", "gender": "Male"},
+            ]
+        return voices
 
     def synthesize_to_mp3(self, text: str, out_mp3: Path, meta: Dict[str, Any]) -> int:
         if not self.available():
