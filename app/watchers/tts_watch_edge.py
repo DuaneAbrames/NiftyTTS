@@ -7,6 +7,7 @@ import traceback
 import json
 import edge_tts
 from job_utils import parse_job_file, finalize_output, download_cover_image
+from job_utils import touch_folder_and_supporting_from_meta
 
 ROOT = Path(__file__).resolve().parents[1]
 IN_DIR = ROOT / "jobs" / "incoming"
@@ -147,6 +148,11 @@ def main():
                 finalize_output(out_mp3, meta)
                 try:
                     download_cover_image(out_mp3.parent)
+                except Exception:
+                    pass
+                # Re-touch supporting files and folder after cover download
+                try:
+                    touch_folder_and_supporting_from_meta(out_mp3, meta)
                 except Exception:
                     pass
 

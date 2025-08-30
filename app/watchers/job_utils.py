@@ -166,6 +166,7 @@ def finalize_output(mp3_path: Path, meta: dict) -> None:
         # Do not block output on extended tag failures
         pass
 
+    ts: float | None = None
     date_str = meta.get("date")
     if isinstance(date_str, str) and date_str:
         try:
@@ -173,7 +174,7 @@ def finalize_output(mp3_path: Path, meta: dict) -> None:
             ts = dt.timestamp()
             os.utime(mp3_path, (ts, ts))
         except Exception:
-            pass
+            ts = None
 
     # Ensure an OPF file exists for this folder capturing series metadata
     try:
@@ -191,11 +192,67 @@ def finalize_output(mp3_path: Path, meta: dict) -> None:
         # OPF creation failures should not block audio output
         pass
 
+    # If we have a timestamp, touch supporting files and containing folder
+    try:
+        if ts is not None:
+            _touch_supporting_and_folder(mp3_path, ts)
+    except Exception:
+        pass
+
     # As the last step, normalize permissions/ownership for host access
     try:
         _fix_perms_and_ownership()
     except Exception:
         # Never block on permission adjustments
+        pass
+
+
+def _touch_supporting_and_folder(mp3_path: Path, ts: float) -> None:
+    """Touch supporting files in the same folder and the folder itself.
+
+    - Applies atime/mtime to all non-temporary files alongside the MP3
+      (including the OPF, cover images, lyric files, etc.).
+    - Skips obvious temporary artifacts like *.tmp and *.download.
+    - Also touches the containing folder so its modified date matches.
+    """
+    folder = mp3_path.parent
+    # Files (non-recursive)
+    try:
+        for p in folder.iterdir():
+            try:
+                if p.is_file():
+                    name = p.name.lower()
+                    if name.endswith(".tmp") or name.endswith(".download"):
+                        continue
+                    os.utime(p, (ts, ts))
+            except Exception:
+                # Continue touching others on individual errors
+                pass
+    except Exception:
+        pass
+    # Folder itself
+    try:
+        os.utime(folder, (ts, ts))
+    except Exception:
+        pass
+
+
+def touch_folder_and_supporting_from_meta(mp3_path: Path, meta: dict) -> None:
+    """Public helper to apply meta['date'] timestamp to folder and files.
+
+    Parses meta['date'] as ISO-8601; on success, touches all supporting files
+    and the containing folder to match that timestamp.
+    """
+    try:
+        date_str = meta.get("date")
+        if isinstance(date_str, str) and date_str:
+            try:
+                dt = datetime.fromisoformat(date_str)
+                ts = dt.timestamp()
+                _touch_supporting_and_folder(mp3_path, ts)
+            except Exception:
+                pass
+    except Exception:
         pass
 
 
