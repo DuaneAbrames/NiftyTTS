@@ -9,7 +9,7 @@ from email.parser import Parser
 from email.utils import parseaddr, parsedate_to_datetime
 import httpx
 from bs4 import BeautifulSoup
-from fastapi import FastAPI, Query, HTTPException, Form, Request
+from fastapi import FastAPI, Query, HTTPException, Form, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse
 from string import Template
 from app.backends import all_backends, available_backends
@@ -32,6 +32,19 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 app = FastAPI(title="NiftyTTS - Simple 2-Step")
 
 SAFE_SCHEMES = {"http", "https"}
+
+# Sample text for voice preview (excerpt from Churchill's "Blood, Toil, Tears and Sweat")
+SAMPLE_TEXT = (
+    "I say to the House as I said to ministers who have joined this government, "
+    "I have nothing to offer but blood, toil, tears and sweat. "
+    "We have before us an ordeal of the most grievous kind. "
+    "We have before us many, many long months of struggle and of suffering. "
+    "You ask, what is our policy? I can say: It is to wage war, by sea, land and air, "
+    "with all our might and with all the strength that God can give us; to wage war "
+    "against a monstrous tyranny, never surpassed in the dark, lamentable catalogue of human crime. "
+    "That is our policy. You ask, what is our aim? I can answer in one word: Victory — "
+    "victory at all costs, victory in spite of all terror, victory, however long and hard the road may be."
+)
 
 HTML_TEMPLATE = Template(r"""<!doctype html>
 <html lang="en">
@@ -535,6 +548,7 @@ def form_step2(u: str, text: str, meta: dict | None = None) -> str:
   <div class="row">
     <button type="submit">Create Audio</button>
     <a class="btn" href="/">Start over</a>
+    <a class="btn" href="/preview">Voice preview</a>
   </div>
 </form>
 <script>
@@ -880,3 +894,120 @@ def list_backends():
     body.extend(items)
     body.append("<p><a class=\"btn\" href=\"/\">Convert another</a></p>")
     return render("\n".join(body))
+
+@app.get("/preview", response_class=HTMLResponse)
+def preview_page():
+    # Build backend and voices lists
+    be_list = all_backends()
+    be_default = os.environ.get("NIFTYTTS_BACKEND", os.environ.get("BACKEND", "edge"))
+    be_options: list[str] = []
+    voices_map: dict[str, list[str]] = {}
+    for be in be_list:
+        sel = " selected" if be.backend_id == be_default else ""
+        be_options.append(f'<option value="{be.backend_id}"{sel}>{html_escape(be.display_name)}</option>')
+        try:
+            vs = be.list_voices()
+        except Exception:
+            vs = []
+        voices_map[be.backend_id] = [str(v.get("name", "")) for v in vs if v.get("name")]
+
+    body = f"""
+<h1>Voice Preview</h1>
+<p class="muted">Pick a backend and voice, then preview a short sample.</p>
+<div class="card">
+  <div class="row">
+    <label>
+      <div><b>Backend</b></div>
+      <select id="pv-backend">
+        {''.join(be_options)}
+      </select>
+    </label>
+    <label>
+      <div><b>Voice</b></div>
+      <select id="pv-voice"></select>
+    </label>
+    <button id="pv-play">Preview</button>
+  </div>
+  <audio id="pv-audio" controls preload="none" style="width:100%; margin-top:.5rem;"></audio>
+  <details style="margin-top:.5rem;">
+    <summary>Show sample text</summary>
+    <pre class="mono" style="white-space:pre-wrap;">{html_escape(SAMPLE_TEXT)}</pre>
+  </details>
+</div>
+<p><a class="btn" href="/">Back to converter</a></p>
+<script>
+  const voicesByBackend = {json.dumps(voices_map)};
+  const beSel = document.getElementById('pv-backend');
+  const voiceSel = document.getElementById('pv-voice');
+  const audioEl = document.getElementById('pv-audio');
+  function fillVoices() {{
+    const bid = beSel.value;
+    const list = voicesByBackend[bid] || [];
+    voiceSel.innerHTML = '';
+    const optNone = document.createElement('option');
+    optNone.value = '';
+    optNone.textContent = '(backend default)';
+    voiceSel.appendChild(optNone);
+    for (const name of list) {{
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      voiceSel.appendChild(opt);
+    }}
+  }}
+  beSel.addEventListener('change', fillVoices);
+  fillVoices();
+  document.getElementById('pv-play').addEventListener('click', () => {{
+    const params = new URLSearchParams();
+    params.set('backend', beSel.value || '');
+    params.set('voice', voiceSel.value || '');
+    const url = '/preview/audio?' + params.toString();
+    audioEl.src = url;
+    audioEl.play().catch(() => {{}});
+  }});
+  // Auto-load once on page open
+  (function() {{
+    const params = new URLSearchParams();
+    params.set('backend', beSel.value || '');
+    params.set('voice', voiceSel.value || '');
+    audioEl.src = '/preview/audio?' + params.toString();
+  }})();
+</script>
+"""
+    return render(body)
+
+@app.get("/preview/audio")
+def preview_audio(backend: str = Query("edge"), voice: str = Query(""), background: BackgroundTasks = None):
+    from app.backends import get_backend
+    from tempfile import NamedTemporaryFile
+
+    be_id = (backend or "").strip()
+    be = get_backend(be_id)
+    if not be or not be.available():
+        raise HTTPException(400, f"Backend '{be_id}' is not available")
+
+    # Synthesize to a temporary MP3 and stream it back
+    tmp = NamedTemporaryFile(delete=False, suffix=".mp3")
+    tmp_path = Path(tmp.name)
+    tmp.close()
+    try:
+        meta = {"voice": voice.strip()} if voice else {}
+        be.synthesize_to_mp3(SAMPLE_TEXT, tmp_path, meta)
+    except Exception as e:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except Exception:
+            pass
+        raise HTTPException(500, f"Synthesis failed: {e}")
+
+    # Schedule deletion after response is sent
+    def _cleanup(p: Path):
+        try:
+            if p.exists():
+                p.unlink()
+        except Exception:
+            pass
+    if background is not None:
+        background.add_task(_cleanup, tmp_path)
+    return FileResponse(path=tmp_path, media_type="audio/mpeg", filename=f"preview-{be_id}.mp3")
